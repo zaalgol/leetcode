@@ -1,0 +1,2052 @@
+run.py:
+from app.app import create_app, socketio
+
+app = create_app() 
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0' ,port=8080)
+    
+    # For debugging purpose. The websocket will not woek well
+    # socketio.run(app, host='0.0.0.0' ,port=8080, debug=True)
+    
+# uWSGI running:
+# uwsgi --http :8080 --gevent 1000 --enable-threads --lazy-apps --http-websockets --master --wsgi-file run.py --callable app
+
+
+app\app.py:
+from flask import Flask
+from flask_jwt_extended import JWTManager
+from flask_cors import CORS
+from flask_migrate import Migrate
+from pymongo import MongoClient
+from app.config.config import Config 
+from flask_socketio import SocketIO
+import logging
+from logging.handlers import RotatingFileHandler
+from app.services.init_service import InitService
+
+jwt = JWTManager()
+migrate = Migrate()
+socketio = SocketIO(cors_allowed_origins="*")
+
+def generate_mongo_client(app):
+    MONGODB_URI = app.config['MONGODB_URI']
+    
+    if int(app.config['IS_MONGO_LOCAL']):
+        mongo_client = MongoClient(MONGODB_URI)
+    else:
+        mongo_client = MongoClient(
+        MONGODB_URI,
+        tls=True,
+        retryWrites=False,
+        tlsCAFile="global-bundle.pem",  # Adjust path accordingly
+        socketTimeoutMS=60000,
+        connectTimeoutMS=60000
+
+    )
+    db = mongo_client['tabular-wizard-db']
+    app.db = db
+    
+def set_logger(app):
+    
+    # Set up the logging handler
+    handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=3)
+    handler.setLevel(logging.INFO)
+
+    # Create a custom logging format
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    handler.setFormatter(formatter)
+
+    # Attach the handler to the application's logger
+    app.logger.addHandler(handler)
+
+    # Example log messages
+    app.logger.info('Logging is configured!')
+    app.logger.error('Sample error message')
+    
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+
+    generate_mongo_client(app)
+    # mongo_client = MongoClient(app.config['MONGODB_URI'])
+    # db = mongo_client.get_default_database()
+    # app.db = db
+    
+    jwt.init_app(app)
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='gevent')  # Attach SocketIO to Flask app
+    # socketio.init_app(app, cors_allowed_origins="*",  engineio_logger=True, logger=True)  # Attach SocketIO to Flask app
+    # socketio.init_app(app, cors_allowed_origins="*") 
+    CORS(app, supports_credentials=True, origins="*")
+
+    from app.routes.api import bp as main_blueprint
+    app.register_blueprint(main_blueprint)
+
+    InitService(app)
+    return app
+
+
+app\__init__.py:
+# from flask import Flask
+# app = Flask(__name__)
+# # from app.app import views
+
+app\config\config.py:
+import os
+from dotenv import load_dotenv
+
+# Load the .env file
+dotenv_path = '/tabular-wizard-server/.env'  # Adjust the path as needed
+load_dotenv(dotenv_path)
+
+class Config:
+    SECRET_KEY = os.getenv('SECRET_KEY')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+    # SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL') # use for multi Docker container deployment
+    # SQLALCHEMY_DATABASE_URI = 'sqlite:///mydatabase.db'  # Use SQLite for local development
+    MONGODB_URI = os.getenv('MONGODB_URI')
+    IS_MONGO_LOCAL = os.getenv('IS_MONGO_LOCAL', 1)
+    IS_STORAGE_LOCAL = os.getenv('IS_STORAGE_LOCAL', 1)
+    ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+    QUEST_PASSWORD = os.getenv('QUEST_PASSWORD')
+    EMAIL_DOMAIN = os.getenv('EMAIL_DOMAIN')
+    JWT_HEADER_NAME = JWT_QUERY_STRING_NAME = 'Authorization'
+    JWT_ACCESS_TOKEN_EXPIRES = os.getenv('JWT_ACCESS_TOKEN_EXPIRES')
+    SAVED_MODELS_FOLDER = os.getenv('SAVED_MODELS_FOLDER')
+    SAVED_INFERENCES_FOLDER = os.getenv('SAVED_INFERENCES_FOLDER')
+    SERVER_NAME = os.getenv('SERVER_NAME')
+    
+    AWS_ACCESS_KEY = os.getenv('AWS_ACCESS_KEY')
+    AWS_SECRET_KEY = os.getenv('AWS_SECRET_KEY')
+    BUCKET_NAME = os.getenv('BUCKET_NAME')
+    
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    MODEL=os.getenv('MODEL')
+    MAX_TOKENS=os.getenv('MAX_TOKENS')
+    LLM_MAX_TRIES=os.getenv('LLM_MAX_TRIES')
+    LLM_NUMBER_OF_DATASET_LINES=os.getenv('LLM_NUMBER_OF_DATASET_LINES')
+    
+
+
+app\entities\model.py:
+from dataclasses import dataclass, field
+from datetime import datetime
+
+@dataclass
+class Model:
+    id: str = field(default=None)
+    user_id: str = field(default=None)
+    model_name: str = field(default=None)
+    file_name: str = field(default=None)
+    file_line_num: int = field(default=0)
+    description: str = field(default=None)
+    model_type: str = field(default=None)
+    is_multi_class: bool = field(default=False)
+    # ensemble: str = field(default='multi')
+    # training_speed: str = field(default=None)
+    training_strategy: str = field(default=None)
+    sampling_strategy: str = field(default=None)
+    target_column: str = field(default=None)
+    created_at: datetime = field(default=None)
+    columns: list[str] = field(default=None)
+    encoding_rules: dict[str, list[str]] = field(default_factory=dict)
+    transformations: dict[str, dict] = field(default_factory=dict)
+    metric: str = field(default=None)
+    formated_evaluations: str = field(default=None)
+    is_llm: bool = field(default=False)
+    model_description_pdf_file_path: str = field(default=None)
+    is_time_series: bool = field(default=False)
+    time_series_code: str = field(default=None)
+	
+
+app\repositories\model_repository.py:
+from bson import ObjectId
+from flask import current_app
+from datetime import datetime, UTC
+from flask import current_app
+
+class ModelRepository:
+    def __init__(self):
+        self.current_app = current_app
+
+    @property
+    def db(self):
+        return self.current_app.db
+    
+    @property
+    def users_collection(self):
+        return self.db['users']
+    
+    def add_or_update_model_for_user(self, model, columns, saved_model_file_path):
+        model_name = model.model_name
+        file_name_path = f"models.{model_name}.file_name"
+        file_line_num_path = f"models.{model_name}.file_line_num"
+        # Define the field paths using dot notation
+        model_field_path = f"models.{model_name}.filePath"
+        created_at_field_path = f"models.{model_name}.created_at"
+        description_field_path = f"models.{model_name}.description"
+        columns_field_path = f"models.{model_name}.columns"
+        target_column_field_path = f"models.{model_name}.target_column"
+        model_type_field_path = f"models.{model_name}.model_type"
+        training_strategy_field_path = f"models.{model_name}.training_strategy"
+        sampling_strategy_field_path = f"models.{model_name}.sampling_strategy"
+        formated_evaluations_field_path = f"models.{model_name}.formated_evaluations"
+        metric_field_path = f"models.{model_name}.metric"
+        encoding_rules_field_path = f"models.{model_name}.encoding_rules"
+        transformations_field_path = f"models.{model_name}.transformations"
+        isDeleted_fieled_path = f"models.{model_name}.isDeleted"
+        is_multi_class_fieled_path = f"models.{model_name}.is_multi_class"
+        train_score_column_field_path = f"models.{model_name}.train_score"
+        test_score_column_field_path = f"models.{model_name}.test_score"
+        model_description_pdf_file_path_path = f"models.{model_name}.model_description_pdf_file_path"
+        is_time_series_field_path = f"models.{model_name}.is_time_series"
+        time_series_code_field_path = f"models.{model_name}.time_series_code"
+        
+        # Get the current UTC datetime
+        current_utc_datetime = datetime.now(UTC)
+        
+        # Update the user document with the model path and current UTC datetime
+        return self.users_collection.update_one(
+            {"_id": ObjectId(model.user_id)},
+            {
+                "$set": {
+                    file_name_path: model.file_name,
+                    file_line_num_path: model.file_line_num,
+                    model_field_path: saved_model_file_path,
+                    description_field_path: model.description,
+                    created_at_field_path: current_utc_datetime,
+                    columns_field_path: columns,
+                    encoding_rules_field_path: model.encoding_rules,
+                    target_column_field_path: model.target_column,
+                    model_type_field_path: model.model_type,
+                    training_strategy_field_path: model.training_strategy,
+                    sampling_strategy_field_path: model.sampling_strategy,
+                    metric_field_path: model.metric,
+                    formated_evaluations_field_path: model.formated_evaluations,
+                    transformations_field_path: model.transformations,
+                    isDeleted_fieled_path: False,
+                    is_multi_class_fieled_path: model.is_multi_class,
+                    train_score_column_field_path: model.train_score,
+                    test_score_column_field_path: model.test_score,
+                    model_description_pdf_file_path_path: model.model_description_pdf_file_path,
+                    is_time_series_field_path: model.is_time_series,
+                    time_series_code_field_path: model.time_series_code
+                }
+            }
+        )
+    
+    def get_user_model_by_user_id_and_model_name(self, user_id, model_name, additonal_properties):
+        pipeline = [
+            {"$match": {"_id": ObjectId(user_id), "isDeleted": {"$ne": True}}},
+            {"$project": {
+            model_name: f"$models.{model_name}",
+            "_id": 0  # Exclude the _id from the results if not needed
+        }},
+            {"$match": {"specific_model.isDeleted": {"$ne": True}}}  # Ensure the model is not marked as deleted
+        ]
+
+        result =  self.users_collection.aggregate(pipeline).next()
+        if result:
+            return self._model_dict_to_front_list(result, additonal_properties)[0]
+        else:
+            return {}
+
+    
+    def get_user_models_by_id(self, user_id, additonal_properties):
+        pipeline = [
+            {"$match": {"_id": ObjectId(user_id), "isDeleted": {"$ne": True}}},
+            {"$project": {"models": {"$objectToArray": "$models"}}},
+            {"$addFields": {"models": {"$filter": {
+                "input": "$models",
+                "cond": {"$not": "$$this.v.isDeleted"}
+            }}}},
+            {"$project": {"models": {"$arrayToObject": "$models"}}}
+        ]
+        result = self.users_collection.aggregate(pipeline).next()
+        if result and result["models"]:
+            return self._model_dict_to_front_list(result.get("models", {}), additonal_properties)
+        else:
+            return {}
+        
+    def delete_model_of_user(self, user_id, model_name, hard_delete=False):
+        """
+        Delete a model for a user. 
+        If hard_delete is True, delete the model physically from the database.
+        Otherwise, set its 'isDeleted' field to True.
+        """
+        model_field_path = f"models.{model_name}"
+        if hard_delete:
+            return self.users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$unset": {model_field_path: ""}}
+            )
+        else:
+            return self.users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {f"{model_field_path}.isDeleted": True}}
+            )
+        
+
+    def _model_dict_to_front_list(self, models_dict, additonal_properties):
+        models_list = []
+        for name, details in models_dict.items():
+            # Initialize model_info with the id
+            model_info = {'id': name}
+            # Dynamically add properties from additonal_properties if they exist in details
+            for property in additonal_properties:
+                if property in details:
+                    model_info[property] = details[property]
+            models_list.append(model_info)
+        return models_list
+    
+
+
+app\repositories\user_repository.py:
+from bson import ObjectId
+from flask import current_app
+from datetime import datetime, UTC
+
+class UserRepository:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @property
+    def db(self):
+        return current_app.db
+
+    @property
+    def users_collection(self):
+        return self.db['users']
+    
+    def get_user_by_id(self, user_id):
+        return self.users_collection.find_one({"_id": ObjectId(user_id), "isDeleted": {"$ne": True}})
+
+    def get_user_by_username(self, username):
+        return self.users_collection.find_one({"username": username, "isDeleted": {"$ne": True}})
+
+    def get_user_by_email(self, email):
+        t = self.users_collection.find_one({"email": email, "isDeleted": {"$ne": True}})
+        return self.users_collection.find_one({"email": email, "isDeleted": {"$ne": True}})
+    
+    def get_user_by_email_and_password(self, email, password):
+        return self.users_collection.find_one({"email": email, "password": password, "isDeleted": {"$ne": True}})
+
+    def create_user(self, email, password):
+        try:
+            user_exists = self.users_collection.find_one({"email": email})
+            if user_exists:
+                return f"user with email {email} already exist"
+            user = {
+                "email": email,
+                "password": password,  # Ensure password is hashed appropriately
+            }
+            result = self.users_collection.insert_one(user)
+            return {"_id": result.inserted_id, **user}
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        
+
+app\routes\api.py:
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask import jsonify, make_response
+from app.entities.model import Model
+from app.services.model_service import ModelService
+from app.services.token_serivce import TokenService
+from app.services.user_service import UserService
+import logging
+
+from flask_jwt_extended import verify_jwt_in_request
+
+# Create a Blueprint
+bp = Blueprint('main', __name__)
+# CORS(bp)
+
+# Instantiate UsersService singleton
+user_service = UserService()
+model_service = ModelService()
+tokenService = TokenService()
+
+@bp.route('/', methods=['GET'])
+#@jwt_required()
+def hello_world():
+    return 'Hello, World!'
+
+@bp.route('/api/login/', methods=['POST', 'OPTIONS'])
+def login():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    email = request.json.get('email', None)
+    password = request.json.get('password', None)
+    if not email or not password:
+        return jsonify({'message': 'Invalid credentials'}), 401
+
+    return user_service.login(email, password)
+
+@bp.route('/api/trainModel/', methods=['POST'])
+@jwt_required()
+def train_model():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    
+    file_name = request.json.get('fileName', None)
+    dataset = request.json.get('dataset', None)
+    model_name = request.json.get('modelName', None)
+    description = request.json.get('description', None)
+    target_column = request.json.get('targetColumn', None)
+    model_type = request.json.get('modelType', None)
+    training_strategy = request.json.get('trainingStrategy', None)
+    sampling_strategy = request.json.get('samplingStrategy', None)
+    metric = request.json.get('metric', None)
+    is_time_series = request.json.get('isTimeSeries', False)
+    model = Model(user_id=user_id, file_name=file_name, model_name=model_name, description=description,
+                   model_type=model_type, training_strategy=training_strategy, sampling_strategy=sampling_strategy,
+                   target_column=target_column, metric=metric, is_time_series=is_time_series)
+
+    return model_service.train_model(model, dataset)
+
+    
+
+@bp.route('/api/userModels/', methods=['GET'])
+@jwt_required()
+def get_user_models():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    models =  model_service.get_user_models_by_id(user_id)
+    return make_response(jsonify({"models": models}), 200)
+
+
+@bp.route('/api/model', methods=['GET'])
+@jwt_required()
+def get_user_model():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    model_name = request.args.get('model_name')
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    model =  model_service.get_user_model_by_user_id_and_model_name(user_id, model_name)
+    return make_response(jsonify({"model": model}), 200)
+
+@bp.route('/api/modelMetric', methods=['GET'])
+@jwt_required()
+def get_model_evaluations():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    model_name = request.args.get('model_name')
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    model_service.get_model_details_file(user_id, model_name)
+    return {}, 200, {}
+
+@bp.route('/api/model', methods=['OPTIONS', 'DELETE'])
+@jwt_required()
+def delete_model():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    model_name = request.args.get('model_name')
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    result =  model_service.delete_model_of_user(user_id, model_name)
+    return {}, 200, {}
+
+
+@bp.route('/api/inference/', methods=['POST'])
+@jwt_required()
+def infrernce():
+    if request.method == 'OPTIONS':
+        # Handle the preflight request
+        return {}, 200, {}
+    user_id =  tokenService.extract_user_id_from_token()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        return {}, 401, {}
+    
+    dataset = request.json.get('dataset', None)
+    model_name = request.json.get('modelName', None)
+    file_name = request.json.get('fileName', None)
+
+    model_service.inference(user_id=user_id, model_name=model_name, file_name=file_name, dataset=dataset)
+
+    return {}, 200, {}
+
+@bp.route('/download/<filename>')
+def download_file(filename):
+    verify_jwt_in_request(locations='query_string')
+    # The token has been validated, proceed with sending the file
+    user_id = get_jwt_identity()
+    model_name = request.args.get('model_name')
+    file_type = request.args.get('file_type')
+    return model_service.download_file(user_id, model_name, filename, file_type)
+
+
+
+app\routes\__init__.py:
+
+
+app\services\hashing_service.py:
+import bcrypt
+
+class PasswordHasher:
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """
+        Hash a password for storing.
+        """
+        # Convert the password to bytes and hash it
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        return hashed.decode('utf-8')
+    
+    @staticmethod
+    def check_password(hashed_password: str, user_password: str) -> bool:
+        """
+        Check a hashed password. Return True if the password matches, False otherwise.
+        """
+        # Convert the hashed password and user password to bytes, then check them
+        return bcrypt.checkpw(user_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+
+app\services\init_service.py:
+from app.services.user_service import UserService
+from app.config.config import Config 
+
+class InitService:
+    def __init__(self, app):
+        self.user_service = UserService()
+        self.seed_admin_user(app)
+        self.seed_quest_user(app)
+
+    def seed_admin_user(self, app):
+        with app.app_context():
+            email = Config.EMAIL_DOMAIN
+            password=Config.ADMIN_PASSWORD
+            return self.user_service.create_user(email, password)
+    
+    def seed_quest_user(self, app):
+        with app.app_context():
+            email = Config.EMAIL_DOMAIN
+            password= Config.QUEST_PASSWORD
+            return self.user_service.create_user(email, password)
+        
+
+
+
+app\services\model_service.py:
+import os
+from app.ai.data_preprocessing import DataPreprocessing
+import app.app as app
+from datetime import datetime, UTC
+from app.entities.model import Model
+from app.repositories.model_repository import ModelRepository
+from app.config.config import Config 
+from flask import current_app, jsonify, send_file
+from werkzeug.utils import safe_join
+
+import pandas as pd
+from app.storage.local_model_storage import LocalModelStorage
+from app.storage.model_storage import ModelStorage
+from app.tasks.inference_task import InferenceTask
+from app.tasks.training_task import TrainingTask
+from app.services.report_file_service import ReportFileService
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+import threading
+
+import matplotlib.pyplot as plt
+
+
+# socketio = SocketIO(cors_allowed_origins="*")
+from app.app import socketio
+
+plt.switch_backend('Agg')
+
+class ModelService:
+    _instance = None
+
+    def __init__(self):
+        self.model_repository = ModelRepository()
+        self.data_preprocessing = DataPreprocessing()
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.reportFileTask = ReportFileService()
+        self.training_task = TrainingTask()
+        self.inference_task = InferenceTask()
+        
+        if int(Config.IS_STORAGE_LOCAL):
+            self.model_storage = LocalModelStorage()
+        else:
+            self.model_storage = ModelStorage()
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def train_model(self, model, dataset):
+        if dataset is None:
+            return {"error": "No dataset provided"}, 400
+        model.file_line_num = len(dataset)
+        df = self.__dataset_to_df(dataset)
+
+        app_context = current_app._get_current_object().app_context()
+
+        thread = threading.Thread(target=self.training_task.run_task, args=(model, df.columns.tolist(), df, self.__training_task_callback, app_context))
+        thread.start()
+        socketio.emit('status', {'status': 'success', 'message': f'Model {model.model_name} training in process.'})
+        
+        return {}, 200, {}
+
+    def __perprocess_data(self, df, drop_other_columns=None):
+        if drop_other_columns:
+            df = self.data_preprocessing.exclude_other_columns(df, columns=drop_other_columns)
+        return df
+    
+    def __dataset_to_df(self, dataset):
+        headers = dataset[0]
+        data_rows = dataset[1:]
+        df = pd.DataFrame(data_rows, columns=headers)
+        return df
+    
+    def inference(self, user_id, model_name, file_name, dataset):
+        loaded_model =  self.model_storage.load_model(user_id, model_name)
+        model_details_dict =  self.get_user_model_by_user_id_and_model_name(user_id, model_name)
+        model_details = Model(**model_details_dict)
+        model_details.user_id = user_id
+        model_details.model_name = model_name
+        model_details.file_name = file_name
+        original_df = self.__dataset_to_df(dataset)
+        original_df = self.__perprocess_data(original_df, drop_other_columns=model_details.columns)
+
+        
+        app_context = current_app._get_current_object().app_context()
+
+        thread = threading.Thread(target=self.inference_task.run_task, args=(model_details, loaded_model, original_df, self.__inference_task_callback, app_context))
+        thread.start()
+
+    def __training_task_callback(self, df, model, trained_model, encoding_rules, transformations, headers, is_training_successfully_finished, app_context):
+        try:
+            with app_context:
+                if not is_training_successfully_finished:
+                    # Emit an event for training failure
+                    socketio.emit('status', {'status': 'failed', 'message': f'Model {model.model_name} training failed.'})
+                else:
+                    saved_model_file_path = self.model_storage.save_model(trained_model, model.user_id, model.model_name)
+                    model.encoding_rules = encoding_rules
+                    model.transformations = transformations
+
+                    model.model_description_pdf_file_path = self.reportFileTask.generate_model_evaluations_file(model, df.copy())
+                    
+                    self.model_repository.add_or_update_model_for_user(model, headers, saved_model_file_path)
+                    
+                    socketio.emit('status', {'status': 'success',
+                                            'file_type': 'evaluations',
+                                            'model_name': f'{model.model_name}',
+                                            'message': f'Model {model.model_name} training completed successfully.',
+                                            'file_url': model.model_description_pdf_file_path})
+        except Exception as e:
+            print(f"Error downloading file: {e}")
+            
+            socketio.emit('status', {'status': 'failed', 'message': f'Model {model.model_name} training failed.'})
+    
+    def __inference_task_callback(self, model_details, original_df, is_inference_successfully_finished, app_context):
+        with app_context:
+            if not is_inference_successfully_finished:
+                # Emit an event for training failure
+                socketio.emit('status', {'status': 'failed', 'message': f'Model {model_details.model_name} inference failed.'})
+            else:
+                # TODO: Add logs to DB
+                current_utc_datetime = datetime.now(UTC).strftime('%Y-%m-%d_%H-%M-%S')
+                SAVED_INFERENCES_FOLDER = os.path.join(app.Config.SAVED_INFERENCES_FOLDER, model_details.user_id, model_details.model_name)
+                uploaf_file_without_sufix = model_details.file_name[:model_details.file_name.index(".")]
+                csv_filename = f"{current_utc_datetime}__{model_details.model_name}__{uploaf_file_without_sufix}__inference.csv"
+                csv_filepath = os.path.join(SAVED_INFERENCES_FOLDER, csv_filename)
+                if not os.path.exists(SAVED_INFERENCES_FOLDER):
+                    os.makedirs(SAVED_INFERENCES_FOLDER)
+                original_df.to_csv(csv_filepath, index=False)
+
+                # Generate a unique URL for the CSV file
+                scheme = 'https' if current_app.config.get('PREFERRED_URL_SCHEME', 'http') == 'https' else 'http'
+                server_name = current_app.config.get('SERVER_NAME', 'localhost:8080')
+                csv_url = f"{scheme}://{server_name}/download/{csv_filename}"
+
+                # Emit event with the URL to the CSV file
+                socketio.emit('status', {
+                    'status': 'success',
+                    'file_type': 'inference',
+                    'model_name': f'{model_details.model_name}',
+                    'message': f'Model {model_details.model_name} inference completed successfully.',
+                    'file_url': csv_url
+                })
+    
+    def download_file(self, user_id, model_name, filename, file_type):
+        try:
+            if file_type == 'inference':
+                saved_folder = current_app.config['SAVED_INFERENCES_FOLDER']
+            else: 
+                saved_folder = current_app.config['SAVED_MODELS_FOLDER']
+            file_directory = safe_join(saved_folder, user_id, model_name)
+            file_path = safe_join(os.getcwd(), file_directory, filename)
+            
+            if not os.path.isfile(file_path):
+                current_app.logger.error(f"File not found: {file_path}")
+                return jsonify({"msg": "File not found"}), 404
+
+            current_app.logger.info(f"Serving file {file_path}")
+            return send_file(file_path, as_attachment=True)
+        except Exception as e:
+            current_app.logger.error(f"Error downloading file: {e}")
+            return jsonify({"msg": str(e)}), 500
+        
+
+    def get_user_models_by_id(self, user_id):
+           result = self.model_repository.get_user_models_by_id(user_id, additonal_properties=['created_at', 'description', 'metric', 'train_score', 'test_score', 'target_column',
+                                                                                                'model_type', 'training_strategy', 'sampling_strategy', 'is_multi_class',
+                                                                                                'file_line_num', 'file_name', 'sampling_strategy'])
+           return result
+    
+    def get_user_model_by_user_id_and_model_name(self, user_id, model_name):
+        return self.model_repository.get_user_model_by_user_id_and_model_name(user_id, model_name,
+                                                                                additonal_properties=['created_at', 'description', 'columns',
+                                                                                                      'encoding_rules', 'transformations', 'metric', 'target_column',
+                                                                                                      'model_type', 'training_strategy', 'sampling_strategy', 'is_multi_class',
+                                                                                                      'is_time_series', 'time_series_code', 'formated_evaluations'])
+        
+    def get_model_details_file(self, user_id, model_name):
+        try:
+            model = self.model_repository.get_user_model_by_user_id_and_model_name(user_id, model_name,
+                                                                                    additonal_properties=['model_description_pdf_file_path'])
+
+              
+            socketio.emit('status', {'status': 'success',
+                                    'file_type': 'evaluations',
+                                    'model_name': f'{model_name}',
+                                    'message': f'Model {model_name} evaluations download successfully.',
+                                    'file_url': model['model_description_pdf_file_path']})
+        except Exception as e:
+            print(f"Error downloading file: {e}")
+            
+            socketio.emit('status', {'status': 'failed', 'message': f'Model {model_name} evaluations download failed.'})
+        
+    
+    def delete_model_of_user(self, user_id, model_name):
+        self.model_storage.delete_model(user_id, model_name)
+        return self.model_repository.delete_model_of_user(user_id, model_name, hard_delete=True)
+    
+
+
+app\services\report_file_service.py:
+import os
+import app.app as app
+from flask import current_app
+
+import seaborn as sns
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, XPreformatted
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import inch
+
+import matplotlib.pyplot as plt
+
+class ReportFileService:
+    _instance = None
+
+    def __init__(self) -> None:
+        pass
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+            
+    def generate_model_evaluations_file(self, model, dataset):
+        # Emit an event for training success
+        SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, model.user_id, model.model_name)
+        evaluations_filename = f"{model.model_name}__evaluations.pdf"
+        evaluations_filepath = os.path.join(SAVED_MODEL_FOLDER, evaluations_filename)
+        
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            os.makedirs(SAVED_MODEL_FOLDER)
+            
+        # Create the PDF document
+        doc = SimpleDocTemplate(evaluations_filepath, pagesize=letter)
+        styles = getSampleStyleSheet()
+        
+        # Define a blue title style
+        title_style = ParagraphStyle(name='Title', parent=styles['Title'], textColor='blue', alignment=TA_CENTER)
+        
+        # Define a preformatted text style with larger font size and fixed-width font
+        preformatted_style = ParagraphStyle(name='Preformatted', fontName='Courier', wordWrap='LTR', fontSize=12, leading=14)
+        
+        flowables = []
+
+        # Select only numeric columns for correlation heatmap
+        numeric_cols = dataset.select_dtypes(include=['number'])
+        
+        # Generate heatmap
+        heatmap_filepath = os.path.join(SAVED_MODEL_FOLDER, f"{model.model_name}_heatmap.png")
+        self.__save_plot_as_image(lambda: sns.heatmap(numeric_cols.corr(), annot=True, cmap='coolwarm', fmt='.2f'),
+                        heatmap_filepath, width=10, height=8, dpi=300)
+
+        # Generate transposed describe heatmap
+        describe_df = dataset.describe().transpose()
+        describe_heatmap_filepath = os.path.join(SAVED_MODEL_FOLDER, f"{model.model_name}_describe_heatmap.png")
+        self.__save_plot_as_image(lambda: sns.heatmap(describe_df, annot=True, cmap='viridis', fmt='.2f'),
+                        describe_heatmap_filepath, width=15, height=12, dpi=300)
+
+        # Add "Heatmap" title
+        flowables.append(Paragraph("Heatmap", title_style))
+        flowables.append(Spacer(1, 12))
+
+        # Add heatmap to PDF
+        heatmap_image = Image(heatmap_filepath, width=6*inch, height=4.8*inch)
+        flowables.append(heatmap_image)
+        flowables.append(Spacer(1, 12))
+
+        # Add "Describe Heatmap" title
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Describe Heatmap", title_style))
+        flowables.append(Spacer(1, 12))
+
+        # Add describe heatmap to PDF
+        describe_heatmap_image = Image(describe_heatmap_filepath, width=6*inch, height=4.8*inch)
+        flowables.append(describe_heatmap_image)
+        flowables.append(Spacer(1, 12))
+
+        # Add "Model Details" title
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Model Details", title_style))
+        flowables.append(Spacer(1, 12))
+
+        # Add text evaluations
+        text = (
+            f"Model Name: {model.model_name}\n"
+            f"Model Type: {model.model_type}\n"
+            f"Training Strategy: {model.training_strategy}\n"
+            f"Sampling Strategy: {model.sampling_strategy}\n"
+            f"Metric: {model.metric}\n\n"
+        )
+        for line in text.split('\n'):
+            flowables.append(Paragraph(line, styles['Normal']))
+            flowables.append(Spacer(1, 12))
+            
+        # Add "Evaluations" title
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Evaluations", title_style))
+        flowables.append(Spacer(1, 12))
+        
+        # Add formatted evaluations to PDF using XPreformatted to preserve spacing and wrap text
+        flowables.append(XPreformatted(model.formated_evaluations, preformatted_style))
+
+        doc.build(flowables)
+
+        # Generate a unique URL for the pdf file
+        scheme = 'https' if current_app.config.get('PREFERRED_URL_SCHEME', 'http') == 'https' else 'http'
+        server_name = current_app.config.get('SERVER_NAME', 'localhost:8080')
+        return f"{scheme}://{server_name}/download/{evaluations_filename}"
+    
+    def __save_plot_as_image(self, plot_func, filepath, width, height, dpi=300):
+        try:
+            fig = plt.figure(figsize=(width, height), dpi=dpi)
+            plot_func()
+            plt.gca().set_xticklabels(plt.gca().get_xticklabels(), rotation=45, ha='right')
+            plt.gca().set_yticklabels(plt.gca().get_yticklabels(), rotation=0)
+            
+            # Set format for the annotations
+            for text in plt.gca().texts:
+                text.set_text(f'{float(text.get_text()):.2f}')
+            
+            plt.tight_layout()
+            fig.savefig(filepath, format='png')
+            plt.close(fig)
+            print(f"Saved plot to {filepath}")
+        except Exception as e:
+            print(f"Error saving plot as image: {e}")
+
+
+app\services\token_serivce.py:
+from flask_jwt_extended import create_access_token, verify_jwt_in_request
+from datetime import timedelta
+
+class TokenService():
+    @staticmethod
+    def create_jwt_token(user_id):
+        access_token = create_access_token(identity=user_id, expires_delta=timedelta(days=1))
+        return access_token
+    
+    @staticmethod
+    def extract_user_id_from_token():
+        return verify_jwt_in_request()[1]['sub']
+
+
+app\services\user_service.py:
+# import app.app as app
+from app.repositories.user_repository import UserRepository
+from app.services.hashing_service import PasswordHasher
+from app.services.token_serivce import TokenService
+from flask import current_app, jsonify, make_response
+
+
+class UserService:
+    _instance = None
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        self.user_repository = UserRepository()
+        self.token_service = TokenService()
+
+    def login(self, email, password):
+        # self.seed_admin_user() # TODO: find away to run migrations
+        # self.seed_quest_user() # TODO: find away to run migrations
+        user = self.user_repository.get_user_by_email(email)
+        if user:
+            is_valid_password = PasswordHasher.check_password(user['password'], password)
+            if is_valid_password:
+                access_token = self.token_service.create_jwt_token(str(user['_id']))
+                response = make_response(jsonify({"message": "Login successful", "access_token": str(access_token)}), 200)
+                return response
+        return jsonify({'message': 'Invalid credentials'}), 401
+    
+    def create_user(self, email, password):
+        hashed_password = PasswordHasher.hash_password(password)
+        user = self.user_repository.create_user(email, hashed_password) 
+        return user
+    
+    def get_user_by_id(self, user_id):
+        return self.user_repository.get_user_by_id(user_id)
+    
+
+app\storage\local_model_storage.py:
+import os
+import pickle
+import shutil
+import app.app as app
+
+
+class LocalModelStorage:
+    
+    def load_model(self, user_id, model_name):
+        SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+        SAVED_MODEL_FILE = os.path.join(SAVED_MODEL_FOLDER, 'model.sav')
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            raise Exception(f"Model {SAVED_MODEL_FILE} not found")
+        return pickle.load(open(SAVED_MODEL_FILE, 'rb'))
+
+    def save_model(self, model, user_id, model_name):
+            SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+            SAVED_MODEL_FILE = os.path.join(SAVED_MODEL_FOLDER, 'model.sav')
+            if not os.path.exists(SAVED_MODEL_FOLDER):
+                os.makedirs(SAVED_MODEL_FOLDER)
+            pickle.dump(model, open(SAVED_MODEL_FILE, 'wb'))
+            return SAVED_MODEL_FILE
+        
+    def delete_model(self, user_id, model_name):
+        SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            pass
+            # raise Exception(f"Model {model_name} for user {user_id} not found")
+        shutil.rmtree(SAVED_MODEL_FOLDER)
+        return f"Model {model_name} for user {user_id} has been deleted"
+
+app\storage\model_storage.py:
+import boto3
+import pickle
+from botocore.exceptions import NoCredentialsError
+from app.config.config import Config
+
+# AWS S3 configuration
+AWS_ACCESS_KEY = Config.AWS_ACCESS_KEY
+AWS_SECRET_KEY = Config.AWS_SECRET_KEY
+BUCKET_NAME = Config.BUCKET_NAME
+
+# Initialize S3 client
+s3_client = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY)
+
+class ModelStorage:
+    def load_model(self, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            response = s3_client.get_object(Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            model_data = response['Body'].read()
+            return pickle.loads(model_data)
+        except s3_client.exceptions.NoSuchKey:
+            raise Exception(f"Model {SAVED_MODEL_KEY} not found in S3 bucket.")
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+
+    def save_model(self, model, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            model_data = pickle.dumps(model)
+            s3_client.put_object(Body=model_data, Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            return SAVED_MODEL_KEY
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+        
+    def delete_model(self, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            return f"Model {SAVED_MODEL_KEY} successfully deleted from S3 bucket."
+        except s3_client.exceptions.NoSuchKey:
+            print(f"Model {SAVED_MODEL_KEY} not found in S3 bucket.")
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+
+
+
+app\tasks\inference_task.py:
+import re
+import numpy as np
+import pandas as pd
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+from app.ai.data_preprocessing import DataPreprocessing
+from app.tasks.llm_task import LlmTask
+
+class InferenceTask:
+    def __init__(self) -> None:
+        self.data_preprocessing = DataPreprocessing()
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.llm_task = LlmTask()
+
+    def run_task(self, model_details, loaded_model, original_df, inference_task_callback, app_context):
+        try:
+            is_inference_successfully_finished = False
+            df_copy = original_df.copy()
+            if model_details.is_time_series:
+                df_copy = self.llm_task.processed_dataset(original_df.copy(), model_details.time_series_code)
+            X_data = self.data_preprocessing.exclude_columns(df_copy, columns_to_exclude=[model_details.target_column])
+            X_data = self.__data_preprocessing(X_data, model_details)
+            
+            if model_details.model_type == 'classification':
+                y_predict = self.classificationEvaluate.predict(loaded_model, X_data)
+                original_df[f'{model_details.target_column}_predict'] = y_predict
+                y_predict_proba = self.classificationEvaluate.predict_proba(loaded_model, X_data)
+                proba_df = pd.DataFrame(y_predict_proba.round(2), columns=[f'Prob_{cls}' for cls in loaded_model.classes_])
+                original_df = pd.concat([original_df, proba_df], axis=1)
+                original_df = self.__evaluate_inference(model_details, original_df, y_predict, y_predict_proba)
+
+            elif model_details.model_type == 'regression':
+                y_predict = self.regressionEvaluate.predict(loaded_model, X_data)
+                original_df[f'{model_details.target_column}_predict'] = y_predict
+                original_df = self.__evaluate_inference(model_details, original_df, y_predict, None)
+                
+                
+            is_inference_successfully_finished = True
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        finally:
+            inference_task_callback(model_details, original_df, is_inference_successfully_finished, app_context)
+
+    def __data_preprocessing(self, df, model):
+        df_copy = df.copy()
+        df_copy = self.data_preprocessing.sanitize_cells(df_copy)
+        df_copy = self.data_preprocessing.fill_missing_numeric_cells(df_copy)
+        df_copy = self.data_preprocessing.set_not_numeric_as_categorial(df_copy)
+        df_copy = self.data_preprocessing.convert_tdatetime_columns_to_datetime_dtype(df_copy)
+        if model.encoding_rules:
+            df_copy = self.data_preprocessing.apply_encoding_rules(df_copy, model.encoding_rules)
+        if model.transformations:
+             df_copy = self.data_preprocessing.transformed_numeric_column_details(df_copy, model.transformations)
+        df_copy = self.data_preprocessing.convert_datatimes_columns_to_normalized_floats(df_copy)
+        return df_copy
+    
+    def extract_original_metrics(self, metrics_string, key):
+        # Define regex pattern to capture the value for the given key
+        pattern = fr'{key}: ([\d\.\-e]+)'
+        
+        # Find all occurrences of the key in the string
+        matches = re.findall(pattern, metrics_string)
+        
+        if len(matches) < 2:
+            raise ValueError(f'Could not find both train and test values for key: {key}')
+        
+        # Return the first match as the train value and the second as the test value
+        return matches[0], matches[1]
+    
+    def format_evaluation(self, value):
+        try:
+            return f"{float(value):.3f}"
+        except ValueError:
+            return value
+    
+    
+    def __evaluate_inference(self, model_details, original_df, y_predict, y_predict_proba):
+        if model_details.target_column in original_df.columns:
+            filtered_original, filtered_predicted, filtered_y_predict_proba = \
+                self.data_preprocessing.filter_invalid_entries(original_df[model_details.target_column], y_predict, y_predict_proba)
+            if model_details.model_type == 'classification':
+                # TODO: use filtered_original, filtered_predicted and also filtered_y_predict
+                inference_evaluations = self.classificationEvaluate.calculate_metrics(filtered_original, filtered_predicted, filtered_y_predict_proba)
+            elif model_details.model_type == 'regression':
+                inference_evaluations = \
+                    self.regressionEvaluate.calculate_metrics(filtered_original, filtered_predicted)
+
+            # Prepare the evaluation data
+            # Add 'Evaluations' column to the original DataFrame
+            if 'Evaluations' not in original_df.columns:
+                # original_df.insert(0, 'Evaluations', np.nan)
+                original_df["Evaluations"] = np.nan
+
+                # Prepare the evaluation data
+                eval_types = ['Inference:', 'Train:', 'Test:']
+                eval_data = {'Evaluations': eval_types}
+
+                # Create empty columns in original_df for each evaluation metric
+                for key in inference_evaluations.keys():
+                    train_eval, test_eval = self.extract_original_metrics(model_details.formated_evaluations, key)
+                    if key not in original_df.columns:
+                        original_df[key] = np.nan
+
+                    eval_data[key] = [
+                        self.format_evaluation(inference_evaluations[key]),
+                        self.format_evaluation(train_eval),
+                        self.format_evaluation(test_eval)
+                    ]
+
+                # Create eval_df with only the evaluation metrics
+                eval_df = pd.DataFrame(eval_data)
+
+                # Iterate over eval_df rows and cells to copy the values into original_df
+                for row_index, row in eval_df.iterrows():
+                    for column_name, cell_value in row.items():
+                        original_df.at[row_index, column_name] = cell_value
+
+        return original_df
+
+
+
+
+app\tasks\llm_task.py:
+import re
+import pandas as pd
+import ast
+from openai import OpenAI
+import app.app as app
+
+CODE = "def feature_engineering(df):\n    # Step 1: Convert the 'Period' column to datetime format\n    df['Period'] = pd.to_datetime(df['Period'])\n\n    # Step 2: Convert all relevant columns to numeric types, handling non-numeric values by converting them to NaN\n    df['Revenue'] = pd.to_numeric(df['Revenue'], errors='coerce')\n    df['Sales_quantity'] = pd.to_numeric(df['Sales_quantity'], errors='coerce')\n    df['Average_cost'] = pd.to_numeric(df['Average_cost'], errors='coerce')\n    df['The_average_annual_payroll_of_the_region'] = pd.to_numeric(df['The_average_annual_payroll_of_the_region'], errors='coerce')\n\n    # Step 3: Fill NaN values in the 'Revenue' column\n    df['Revenue'].fillna(method='ffill', inplace=True)\n    df['Revenue'].fillna(method='bfill', inplace=True)\n\n    # Step 4: Generate time-based features\n    df['year'] = df['Period'].dt.year\n    df['month'] = df['Period'].dt.month\n    df['quarter'] = df['Period'].dt.quarter\n    df['day_of_year'] = df['Period'].dt.dayofyear\n    df['week_of_year'] = df['Period'].dt.isocalendar().week\n    df['day_of_week'] = df['Period'].dt.dayofweek\n\n    # Step 5: Create lag features for the specified columns (up to 12 lags)\n    lag_columns = ['Revenue', 'Sales_quantity', 'Average_cost', 'The_average_annual_payroll_of_the_region']\n    for column in lag_columns:\n        for lag in range(1, 13):\n            df[f'{column}_lag_{lag}'] = df[column].shift(lag).fillna(0)\n\n    # Step 6: Create rolling window features (mean and sum) for the specified columns\n    window_sizes = [3, 6, 12]\n    for column in lag_columns:\n        for window in window_sizes:\n            df[f'{column}_rolling_mean_{window}'] = df[column].rolling(window=window).mean().fillna(0)\n            df[f'{column}_rolling_sum_{window}'] = df[column].rolling(window=window).sum().fillna(0)\n\n    return df"
+class LlmTask:
+    def __init__(self) -> None:
+        self.api_key = app.Config.OPENAI_API_KEY
+        self.model = app.Config.MODEL
+        self.max_tokens = app.Config.MAX_TOKENS
+        self.llm_max_tries = app.Config.LLM_MAX_TRIES
+        self.llm_number_of_dataset_lines = app.Config.LLM_NUMBER_OF_DATASET_LINES
+
+    def use_llm_toproccess_timeseries_dataset(self, raw_dataset, target_column):
+        # return raw_dataset, CODE
+        try_no = 1
+        try:
+            head_rows = raw_dataset.head(int(self.llm_number_of_dataset_lines)).to_csv(index=False)
+            tail_rows = raw_dataset.tail(int(self.llm_number_of_dataset_lines)).to_csv(index=False)
+
+            def use_llm_toproccess_timeseries_dataset_execution():
+                # Get the feature engineering code from LLM model
+                code = self._get_feature_engineering_code(
+                    head_rows, tail_rows, target_column
+                )
+
+                processed_dataset = self.processed_dataset(raw_dataset, code)
+
+                # Return the processed dataset
+                print(f"processed_dataset: {processed_dataset}")
+                return processed_dataset, code
+
+            return use_llm_toproccess_timeseries_dataset_execution()
+        except Exception as e:
+            print(f"{e}")
+            if try_no < self.llm_max_tries:
+                try_no += 1
+                return use_llm_toproccess_timeseries_dataset_execution()
+
+    def processed_dataset(self, raw_dataset, code):
+        try:
+            # Check if the code is safe before executing
+            if not self.is_code_safe(code):
+                raise Exception("Generated code is not safe to execute.")
+
+            # Prepare the execution environment
+            local_vars = {}
+            safe_globals = {"pd": pd, "int": int, "float": float, "range": range, "__builtins__": {}}
+
+            # Execute the code within the context of local_vars and safe_globals
+            exec(code, safe_globals, local_vars)
+
+            # Retrieve the feature_engineering function from local_vars
+            feature_engineering = local_vars["feature_engineering"]
+            processed_dataset = feature_engineering(raw_dataset)
+            return processed_dataset
+        except Exception as e:
+            print(e)
+
+    def _get_feature_engineering_code(self, head_rows, tail_rows, target_column):
+        # return CODE
+        # Sanitize the data to remove any code or malicious content
+        head_rows = self.sanitize_data(head_rows)
+        tail_rows = self.sanitize_data(tail_rows)
+
+        # Combine the head and tail rows into a single prompt
+        combined_data = f"head of {self.llm_number_of_dataset_lines} rows:\n{head_rows}\ntail of {self.llm_number_of_dataset_lines} rows:\n{tail_rows}"
+        prompt = (
+            f"Given the following raw time series dataset:\n{combined_data}\n"
+            f"Please write a Python function named feature_engineering with a parameter named df, that performs feature engineering to predict the '{target_column}' column. "
+            "The function should include the following steps:\n"
+            "1. Convert the datetime, date, and time columns to datetime format.\n"
+            "2. Convert all relevant columns to numeric types, handling non-numeric values by converting them to NaN.\n"
+            "3. Fill any NaN values in the target column with the next value (forward fill) if the target column is missing, and for the last row, fill it with the previus vlaue.\n"
+            "4. Generate time-based features such as year, month, quarter, hour, day of year, and week of year.\n"
+            "5. Create lag features for the specified columns (up to 12 lags). If lag cell value is NaN, convert it to 0.0 \n"
+            "6. Create rolling window features (mean and sum) for the specified columns with windows of 3, 6, and 12 periods. If cell value is NaN, convert it to 0.0\n"
+            "Ensure that the generated code is safe and does not perform any harmful or malicious actions. "
+            "The function should not read from any files and should return the processed dataset directly as a variable named 'df'. "
+            "Do not include any data scaling or transformations. Handle missing values appropriately to ensure columns are treated as numeric types, "
+            "and fill missing values to keep the number of rows consistent."
+            "\nNote: Do not include any import statements in your code; assume all necessary libraries are already imported."
+        )
+        print(f"prompt:{prompt}")
+        client = OpenAI(api_key=self.api_key)
+        try:
+            # Use OpenAI API to get the feature engineering code
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+            )
+
+            # Extract the code from the response
+            code_match = re.search(
+                r"```python\n(.*?)\n```", response.choices[0].message.content, re.DOTALL
+            )
+            if not code_match:
+                raise Exception("Failed to extract code from the response.")
+
+            code = code_match.group(1)
+            code = code.split("# Example usage")[0]
+            print(f"code: {code}")
+            return code
+        except Exception as e:
+            print(f"{e}")
+
+    def is_code_safe(self, code):
+        """
+        Check if the provided code is safe to execute.
+        """
+        try:
+            # Parse the code into an Abstract Syntax Tree (AST)
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            print(f"Syntax error in code: {e}")
+            return False
+
+        # Check for dangerous nodes in the AST
+        if not self._is_ast_safe(tree):
+            return False
+
+        return True
+
+    def _is_ast_safe(self, tree):
+        """
+        Recursively check AST nodes for unsafe constructs.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Check if import statements are safe
+                # if not self._is_import_safe(node):
+                    return False
+            elif isinstance(node, ast.Call):
+                # Check if function calls are safe
+                if not self._is_call_safe(node):
+                    return False
+            elif isinstance(node, ast.Attribute):
+                # Check if attribute access is safe
+                if not self._is_attribute_safe(node):
+                    return False
+            elif isinstance(node, ast.Name):
+                # Check if variable or function names are safe
+                if not self._is_name_safe(node):
+                    return False
+        return True
+
+    # def _is_import_safe(self, node):
+    #     """
+    #     Check if import statements are importing safe modules.
+    #     """
+    #     allowed_modules = {'pandas', 'pd'}
+    #     for alias in node.names:
+    #         module_name = alias.name
+    #         if module_name not in allowed_modules:
+    #             print(f"Importing unsafe module '{module_name}' is not allowed.")
+    #             return False
+    #     return True
+
+    def _is_call_safe(self, node):
+        """
+        Check if function calls are safe.
+        """
+        dangerous_functions = {
+            'eval', 'exec', 'open', 'compile', 'input',
+            'globals', 'locals', 'vars', '__import__'
+        }
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+            if func_name in dangerous_functions:
+                print(f"Use of dangerous function '{func_name}' detected.")
+                return False
+        elif isinstance(node.func, ast.Attribute):
+            # Check if calling dangerous methods from dangerous modules
+            if isinstance(node.func.value, ast.Name):
+                module_name = node.func.value.id
+                attr_name = node.func.attr
+                dangerous_modules = {'os', 'sys', 'subprocess', 'shutil'}
+                if module_name in dangerous_modules:
+                    print(f"Use of dangerous module '{module_name}' detected.")
+                    return False
+        return True
+
+    def _is_attribute_safe(self, node):
+        """
+        Check if attribute access is safe.
+        """
+        if isinstance(node.value, ast.Name):
+            if node.value.id == '__builtins__':
+                print("Access to '__builtins__' is not allowed.")
+                return False
+        return True
+
+    def _is_name_safe(self, node):
+        """
+        Check if variable or function names are safe.
+        """
+        dangerous_names = {
+            'eval', 'exec', 'open', 'compile', 'input',
+            'globals', 'locals', 'vars', '__import__', '__builtins__'
+        }
+        if node.id in dangerous_names:
+            print(f"Use of dangerous name '{node.id}' detected.")
+            return False
+        return True
+
+    def sanitize_data(self, data):
+        """
+        Remove any code-like patterns from the data.
+        """
+        # Remove any script tags or code injections
+        data = re.sub(r'[<>]', '', data)
+        data = re.sub(r'(?i)script', '', data)
+        data = re.sub(r'(?i)eval\(', '', data)
+        return data
+
+
+app\tasks\training_task.py:
+from app.ai.models.classification.implementations.lightgbm_classifier import LightgbmClassifier
+from app.ai.data_preprocessing import DataPreprocessing 
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+from app.ai.models.regression.implementations.lightgbm_regerssor import LightGBMRegressor
+from app.ai.models.regression.ensemble.ensemble import Ensemble as RegressionEnsemble
+from app.ai.models.classification.ensemble.ensemble import Ensemble as ClassificationEnsemble
+from app.tasks.llm_task import LlmTask
+
+class TrainingTask:
+    def __init__(self) -> None:
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.data_preprocessing = DataPreprocessing()
+        self.llm_task = LlmTask()
+
+    def run_task(self, model, headers, df, task_callback, app_context):
+        is_training_successfully_finished = False
+        trained_model = None
+        evaluations = None
+        encoding_rules = None
+        transformations = None
+        try:
+            if model.training_strategy == 'ensembleModelsFast' or model.training_strategy == 'ensembleModelsTuned':
+                trained_model, evaluations, encoding_rules, transformations = self.__train_multi_models(model, df.copy())
+            else:
+                trained_model, evaluations, encoding_rules, transformations = self.__train_single_model(model, df.copy())
+            is_training_successfully_finished = True
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        finally:
+            try:
+                model.formated_evaluations = evaluations['formated_evaluations']
+                model.train_score = evaluations['train_score']
+                model.test_score = evaluations['test_score']
+                task_callback(df, model, trained_model, encoding_rules, transformations,  headers, is_training_successfully_finished, app_context)
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+                is_training_successfully_finished = False
+                task_callback(None, model, None, None, None, None, is_training_successfully_finished, app_context)
+
+
+    def __train_single_model(self, model, df):
+        df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+        metric = model.metric
+        if model.model_type == 'classification':
+            training_model = LightgbmClassifier(train_df = df, target_column = model.target_column, scoring=model.metric, 
+                                                sampling_strategy=model.sampling_strategy)
+            evaluate = self.classificationEvaluate
+
+        elif model.model_type == 'regression':
+            training_model = LightGBMRegressor(train_df = df, target_column = model.target_column, scoring=model.metric)
+            evaluate = self.regressionEvaluate
+            metric = evaluate.get_metric_mapping(model.metric)
+
+        if model.training_strategy == 'singleModelTuned':
+            training_model.tune_hyper_parameters()
+
+        trained_model = training_model.train()
+        evaluations = evaluate.evaluate_train_and_test(trained_model, training_model)
+        formated_evaluations = evaluate.format_train_and_test_evaluation(evaluations)
+        print(formated_evaluations)
+
+        train_score = evaluations['train_metrics'][metric]
+        test_score = evaluations['test_metrics'][metric]
+        evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+        
+        return trained_model, evaluations, None, None
+        
+
+    def __train_multi_models(self, model, df):
+        if model.model_type == 'classification':
+            df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+            ensemble = ClassificationEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True, apply_encoding_rules=True,
+                                              create_transformations=True, apply_transformations=True,
+                                              sampling_strategy=model.sampling_strategy, scoring=model.metric)
+            ensemble.create_models(df)
+            ensemble.sort_models_by_score()
+            ensemble.create_voting_classifier()
+            if model.training_strategy == 'ensembleModelsTuned':
+                ensemble.tuning_top_models()
+            ensemble.train_voting_classifier()
+            ensemble.evaluate_voting_classifier()
+
+            evaluate = self.classificationEvaluate
+            formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_classifier_evaluations)
+            print(formated_evaluations)
+            train_score = ensemble.voting_classifier_evaluations['train_metrics'][model.metric]
+            test_score = ensemble.voting_classifier_evaluations['test_metrics'][model.metric]
+            evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+            
+            return ensemble.trained_voting_classifier, evaluations, ensemble.encoding_rules, ensemble.transformations
+        
+        if model.model_type == 'regression':
+            try:
+                df = self.__data_preprocessing(df, model)
+                ensemble = RegressionEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True,
+                                            apply_encoding_rules=True, create_transformations=True, apply_transformations=True, scoring=model.metric)
+                ensemble.create_models(df)
+                ensemble.sort_models_by_score()
+
+                ensemble.create_voting_regressor()
+                if model.training_strategy == 'ensembleModelsTuned':
+                    ensemble.tuning_top_models()
+                ensemble.train_voting_regressor()
+                ensemble.evaluate_voting_regressor()
+
+                evaluate = self.regressionEvaluate
+                formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_regressor_evaluations)
+                print(formated_evaluations)
+                metric = self.regressionEvaluate.get_metric_mapping(model.metric)
+                train_score = ensemble.voting_regressor_evaluations['train_metrics'][metric]
+                test_score = ensemble.voting_regressor_evaluations['test_metrics'][metric]
+                evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+                
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+            return ensemble.trained_voting_regressor, evaluations, ensemble.encoding_rules, ensemble.transformations
+            
+        
+    def __data_preprocessing(self, df, model, fill_missing_numeric_cells=False):
+        df_copy=df.copy()
+        if model.is_time_series:
+            df_copy, model.time_series_code = self.llm_task.use_llm_toproccess_timeseries_dataset(df_copy, model.target_column)
+        data_preprocessing = DataPreprocessing()
+        # df_copy = data_preprocessing.sanitize_dataframe(df_copy)
+        if fill_missing_numeric_cells:
+            df_copy = data_preprocessing.fill_missing_numeric_cells(df_copy)
+        df_copy = self.data_preprocessing.convert_tdatetime_columns_to_datetime_dtype(df_copy)
+        return df_copy 
+
+
+    
+
+
+app\temp\llm3.py:
+from io import StringIO
+import pandas as pd
+
+code = '''import pandas as pd\n\ndef feature_engineering(df):\n    # Parse the 'Period' column to datetime\n    df['Period'] = pd.to_datetime(df['Period'], format='%d.%m.%Y')\n    \n    # Set the 'Period' column as the index\n    df.set_index('Period', inplace=True)\n    \n    # Generate time-based features\n    df['Year'] = df.index.year\n    df['Month'] = df.index.month\n    df['Quarter'] = df.index.quarter\n    \n    # Create lag features\n    for lag in range(1, 4):  # Create lag features for 1 to 3 months\n        df[f'Revenue_lag_{lag}'] = df['Revenue'].shift(lag)\n        df[f'Sales_quantity_lag_{lag}'] = df['Sales_quantity'].shift(lag)\n        df[f'Average_cost_lag_{lag}'] = df['Average_cost'].shift(lag)\n\n    # Create rolling window features\n    for window in [3, 6]:  # Use rolling windows of 3 and 6 months\n        df[f'Revenue_roll_mean_{window}'] = df['Revenue'].rolling(window=window).mean()\n        df[f'Sales_quantity_roll_mean_{window}'] = df['Sales_quantity'].rolling(window=window).mean()\n        df[f'Average_cost_roll_mean_{window}'] = df['Average_cost'].rolling(window=window).mean()\n        df[f'Revenue_roll_std_{window}'] = df['Revenue'].rolling(window=window).std()\n        df[f'Sales_quantity_roll_std_{window}'] = df['Sales_quantity'].rolling(window=window).std()\n        df[f'Average_cost_roll_std_{window}'] = df['Average_cost'].rolling(window=window).std()\n\n    # Drop NaNs resulting from lagged and rolling features\n    df.dropna(inplace=True)\n    \n    return df\n\n'''
+raw_dataset='''Period,Revenue,Sales_quantity,Average_cost,The_average_annual_payroll_of_the_region
+01.01.2015,16010072.1195,12729,1257.76354148008,30024676
+01.02.2015,15807587.449808,11636,1358.50699981162,30024676
+01.03.2015,22047146.023644,15922,1384.69702447205,30024676
+01.04.2015,18814583.29428,15227,1235.60670481907,30024676
+01.05.2015,14021479.611678,8620,1626.62176469582,30024676
+01.06.2015,16783928.522112,13160,1275.37450775927,30024676
+01.07.2015,19161892.194872,17254,1110.57680508126,30024676
+01.08.2015,15204984.296742,8642,1759.4288702548,30024676
+01.09.2015,20603939.9751,16144,1276.25990926041,30024676
+01.10.2015,20992874.780136,18135,1157.58890433615,30024676
+01.11.2015,14993369.65763,10841,1383.02459714325,30024676
+01.12.2015,27791807.639848,22113,1256.80855785502,30024676
+01.01.2016,28601586.496,15365,1861.4765047836,27828571
+01.02.2016,22367074.065584,13153,1700.53022622854,27828571
+01.03.2016,29738608.568,18339,1621.60469862043,27828571
+01.04.2016,28351007.9388,13909,2038.3210826659,27828571
+01.05.2016,15264603.734865,8553,1784.70755698176,27828571
+01.06.2016,24385658.077056,15101,1614.83730064605,27828571
+01.07.2016,29486517.069955,15695,1878.72042497324,27828571
+01.08.2016,15270117.2565,8314,1836.67515714457,27828571
+01.09.2016,36141027.562,17764,2034.50954526008,27828571
+01.10.2016,27915143.655,18969,1471.61914992883,27828571
+01.11.2016,21272049.3454,13433,1583.56654101094,27828571
+01.12.2016,42014159.88396,27029,1554.41044374413,27828571
+01.01.2017,36007380.67,16889,2132.00193439517,27406473
+01.02.2017,30396775.3784,15864,1916.08518522441,27406473
+01.03.2017,47678130.72603,22786,2092.43091047266,27406473
+01.04.2017,27013964.728324,17910,1508.31740526655,27406473
+01.05.2017,24948844.698,10777,2315.00832309548,27406473
+01.06.2017,31101345.543,18799,1654.4148913772,27406473
+01.07.2017,33848822.228544,17899,1891.10130334343,27406473
+01.08.2017,16454666.958,9649,1705.32355249249,27406473
+01.09.2017,31650092.652,20159,1570.02295014634,27406473
+01.10.2017,31572205.6224,19519,1617.51143103643,27406473
+01.11.2017,22446371.0268,15360,1461.35228039063,27406473
+01.12.2017,44966125.7696,30833,1458.37660200435,27406473
+01.01.2018,44067520.858,19812,2224.28431546538,28197847
+01.02.2018,36020287.1553,18424,1955.07420512918,28197847
+01.03.2018,46995990.4125,29004,1620.32790003103,28197847
+01.04.2018,35536487.6848,22033,1612.87558139155,28197847
+01.05.2018,29699599.176,14959,1985.40003850525,28197847
+01.06.2018,33261065.3886,23067,1441.93286463779,28197847
+01.07.2018,35826534.9072,18397,1947.41180122846,28197847
+01.08.2018,23268655.2112,12045,1931.81031226235,28197847
+01.09.2018,35423489.85,23358,1516.54635884922,28197847
+01.10.2018,39831565.6974,22644,1759.03399122946,28197847
+01.11.2018,32999145.2096,19765,1669.57476395649,28197847
+01.12.2018,47221828.2018,33207,1422.04439430843,28197847
+01.01.2019,36459960.091485,24096,1513.11255359749,29878525
+01.02.2019,36546498.663015,21624,1690.08965330258,29878525
+01.03.2019,54198706.7196,33379,1623.7366823332,29878525
+01.04.2019,32743989.6056,22265,1470.64853382439,29878525
+01.05.2019,32531657.5397,16967,1917.34882652797,29878525
+01.06.2019,47709701.6346,24958,1911.59955263242,29878525
+01.07.2019,45992141.57398,21917,2098.46884035133,29878525
+01.08.2019,36933665.022,14431,2559.32818390964,29878525
+01.09.2019,48526260.1344,23253,2086.88169846471,29878525
+01.10.2019,44160416.1824,26603,1659.9788062399,29878525
+01.11.2019,36374956.4944,21987,1654.38470434348,29878525
+01.12.2019,58756473.6608,38069,1543.42046444088,29878525
+01.01.2020,56288300.87,27184,2070.64085013243,29044998
+01.02.2020,40225243.264,23509,1711.05718082437,29044998
+01.03.2020,50022165.2325,32569,1535.88274839571,29044998
+01.04.2020,52320692.9428,26615,1965.83479026113,29044998
+01.05.2020,,,,
+01.06.2020,,,,
+01.07.2020,,,,
+01.08.2020,,,,
+01.09.2020,,,,
+01.10.2020,,,,
+01.11.2020,,,,
+01.12.2020,,,,
+01.01.2021,,,,
+01.02.2021,,,,
+01.03.2021,,,,
+01.04.2021,,,,
+01.05.2021,,,,
+01.06.2021,,,,
+01.07.2021,,,,
+01.08.2021,,,,
+01.09.2021,,,,
+01.10.2021,,,,
+01.11.2021,,,,
+01.12.2021,,,,
+01.01.2022,,,,
+01.02.2022,,,,
+01.03.2022,,,,
+01.04.2022,,,,
+01.05.2022,,,,
+01.06.2022,,,,
+01.07.2022,,,,
+01.08.2022,,,,
+01.09.2022,,,,
+01.10.2022,,,,
+01.11.2022,,,,
+01.12.2022,,,,
+'''
+
+exec(code)
+processed_dataset = feature_engineering(pd.read_csv(StringIO(raw_dataset)))
+print(processed_dataset)
+
+app\temp\llm_temp.py:
+import pandas as pd
+code = '''import pandas as pd
+
+def feature_engineering(df):
+    # Parse dates
+    df['Period'] = pd.to_datetime(df['Period'], format='%d.%m.%Y')
+    df = df.set_index('Period')
+
+    # Generate time-based features
+    df['Year'] = df.index.year
+    df['Month'] = df.index.month
+    df['Quarter'] = df.index.quarter
+
+    # Create lag features
+    for lag in range(1, 13):  # 1 to 12 months lag
+        df[f'Revenue_lag_{lag}'] = df['Revenue'].shift(lag)
+        df[f'Sales_quantity_lag_{lag}'] = df['Sales_quantity'].shift(lag)
+        df[f'Average_cost_lag_{lag}'] = df['Average_cost'].shift(lag)
+    
+    # Create rolling window features
+    for window in [3, 6, 12]:  # 3, 6, 12 months rolling window
+        df[f'Revenue_roll_mean_{window}'] = df['Revenue'].rolling(window=window).mean()
+        df[f'Sales_quantity_roll_mean_{window}'] = df['Sales_quantity'].rolling(window=window).mean()
+        df[f'Average_cost_roll_mean_{window}'] = df['Average_cost'].rolling(window=window).mean()
+        df[f'Revenue_roll_std_{window}'] = df['Revenue'].rolling(window=window).std()
+        df[f'Sales_quantity_roll_std_{window}'] = df['Sales_quantity'].rolling(window=window).std()
+        df[f'Average_cost_roll_std_{window}'] = df['Average_cost'].rolling(window=window).std()
+    
+    # Handle missing values if necessary
+    df = df.dropna()
+
+    return df'''
+    
+raw_dataset = '''Period,Revenue,Sales_quantity,Average_cost,The_average_annual_payroll_of_the_region
+01.01.2015,16010072.1195,12729,1257.76354148008,30024676
+01.02.2015,15807587.449808,11636,1358.50699981162,30024676
+01.03.2015,22047146.023644,15922,1384.69702447205,30024676
+01.04.2015,18814583.29428,15227,1235.60670481907,30024676
+01.05.2015,14021479.611678,8620,1626.62176469582,30024676
+01.06.2015,16783928.522112,13160,1275.37450775927,30024676
+01.07.2015,19161892.194872,17254,1110.57680508126,30024676
+01.08.2015,15204984.296742,8642,1759.4288702548,30024676
+01.09.2015,20603939.9751,16144,1276.25990926041,30024676
+01.10.2015,20992874.780136,18135,1157.58890433615,30024676
+01.11.2015,14993369.65763,10841,1383.02459714325,30024676
+01.12.2015,27791807.639848,22113,1256.80855785502,30024676
+01.01.2016,28601586.496,15365,1861.4765047836,27828571
+01.02.2016,22367074.065584,13153,1700.53022622854,27828571
+01.03.2016,29738608.568,18339,1621.60469862043,27828571
+01.04.2016,28351007.9388,13909,2038.3210826659,27828571
+01.05.2016,15264603.734865,8553,1784.70755698176,27828571
+01.06.2016,24385658.077056,15101,1614.83730064605,27828571
+01.07.2016,29486517.069955,15695,1878.72042497324,27828571
+01.08.2016,15270117.2565,8314,1836.67515714457,27828571
+01.09.2016,36141027.562,17764,2034.50954526008,27828571
+01.10.2016,27915143.655,18969,1471.61914992883,27828571
+01.11.2016,21272049.3454,13433,1583.56654101094,27828571
+01.12.2016,42014159.88396,27029,1554.41044374413,27828571
+01.01.2017,36007380.67,16889,2132.00193439517,27406473
+01.02.2017,30396775.3784,15864,1916.08518522441,27406473
+01.03.2017,47678130.72603,22786,2092.43091047266,27406473
+01.04.2017,27013964.728324,17910,1508.31740526655,27406473
+01.05.2017,24948844.698,10777,2315.00832309548,27406473
+01.06.2017,31101345.543,18799,1654.4148913772,27406473
+01.07.2017,33848822.228544,17899,1891.10130334343,27406473
+01.08.2017,16454666.958,9649,1705.32355249249,27406473
+01.09.2017,31650092.652,20159,1570.02295014634,27406473
+01.10.2017,31572205.6224,19519,1617.51143103643,27406473
+01.11.2017,22446371.0268,15360,1461.35228039063,27406473
+01.12.2017,44966125.7696,30833,1458.37660200435,27406473
+01.01.2018,44067520.858,19812,2224.28431546538,28197847
+01.02.2018,36020287.1553,18424,1955.07420512918,28197847
+01.03.2018,46995990.4125,29004,1620.32790003103,28197847
+01.04.2018,35536487.6848,22033,1612.87558139155,28197847
+01.05.2018,29699599.176,14959,1985.40003850525,28197847
+01.06.2018,33261065.3886,23067,1441.93286463779,28197847
+01.07.2018,35826534.9072,18397,1947.41180122846,28197847
+01.08.2018,23268655.2112,12045,1931.81031226235,28197847
+01.09.2018,35423489.85,23358,1516.54635884922,28197847
+01.10.2018,39831565.6974,22644,1759.03399122946,28197847
+01.11.2018,32999145.2096,19765,1669.57476395649,28197847
+01.12.2018,47221828.2018,33207,1422.04439430843,28197847
+01.01.2019,36459960.091485,24096,1513.11255359749,29878525
+01.02.2019,36546498.663015,21624,1690.08965330258,29878525
+01.03.2019,54198706.7196,33379,1623.7366823332,29878525
+01.04.2019,32743989.6056,22265,1470.64853382439,29878525
+01.05.2019,32531657.5397,16967,1917.34882652797,29878525
+01.06.2019,47709701.6346,24958,1911.59955263242,29878525
+01.07.2019,45992141.57398,21917,2098.46884035133,29878525
+01.08.2019,36933665.022,14431,2559.32818390964,29878525
+01.09.2019,48526260.1344,23253,2086.88169846471,29878525
+01.10.2019,44160416.1824,26603,1659.9788062399,29878525
+01.11.2019,36374956.4944,21987,1654.38470434348,29878525
+01.12.2019,58756473.6608,38069,1543.42046444088,29878525
+01.01.2020,56288300.87,27184,2070.64085013243,29044998
+01.02.2020,40225243.264,23509,1711.05718082437,29044998
+01.03.2020,50022165.2325,32569,1535.88274839571,29044998
+01.04.2020,52320692.9428,26615,1965.83479026113,29044998
+01.05.2020,,,,
+01.06.2020,,,,
+01.07.2020,,,,
+01.08.2020,,,,
+01.09.2020,,,,
+01.10.2020,,,,
+01.11.2020,,,,
+01.12.2020,,,,
+01.01.2021,,,,
+01.02.2021,,,,
+01.03.2021,,,,
+01.04.2021,,,,
+01.05.2021,,,,
+01.06.2021,,,,
+01.07.2021,,,,
+01.08.2021,,,,
+01.09.2021,,,,
+01.10.2021,,,,
+01.11.2021,,,,
+01.12.2021,,,,
+01.01.2022,,,,
+01.02.2022,,,,
+01.03.2022,,,,
+01.04.2022,,,,
+01.05.2022,,,,
+01.06.2022,,,,
+01.07.2022,,,,
+01.08.2022,,,,
+01.09.2022,,,,
+01.10.2022,,,,
+01.11.2022,,,,
+01.12.2022,,,,'''
+    
+
+df = pd.DataFrame(raw_dataset)
+local_vars = {'pd': pd, 'df': raw_dataset.copy()}
+exec(feature_engineering.__code__, {}, local_vars)
+processed_dataset = local_vars.get('df', raw_dataset)
+
+print(raw_dataset)
+
+
+app\temp\templlm2.py:
+import pandas as pd
+from io import StringIO
+
+# Code provided in a variable
+code = '''import pandas as pd
+
+def feature_engineering(df):
+    # Parse dates
+    df['Period'] = pd.to_datetime(df['Period'], format='%d.%m.%Y')
+    df = df.set_index('Period')
+
+    # Generate time-based features
+    df['Year'] = df.index.year
+    df['Month'] = df.index.month
+    df['Quarter'] = df.index.quarter
+
+    # Create lag features
+    for lag in range(1, 13):  # 1 to 12 months lag
+        df[f'Revenue_lag_{lag}'] = df['Revenue'].shift(lag)
+        df[f'Sales_quantity_lag_{lag}'] = df['Sales_quantity'].shift(lag)
+        df[f'Average_cost_lag_{lag}'] = df['Average_cost'].shift(lag)
+    
+    # Create rolling window features
+    for window in [3, 6, 12]:  # 3, 6, 12 months rolling window
+        df[f'Revenue_roll_mean_{window}'] = df['Revenue'].rolling(window=window).mean()
+        df[f'Sales_quantity_roll_mean_{window}'] = df['Sales_quantity'].rolling(window=window).mean()
+        df[f'Average_cost_roll_mean_{window}'] = df['Average_cost'].rolling(window=window).mean()
+        df[f'Revenue_roll_std_{window}'] = df['Revenue'].rolling(window=window).std()
+        df[f'Sales_quantity_roll_std_{window}'] = df['Sales_quantity'].rolling(window=window).std()
+        df[f'Average_cost_roll_std_{window}'] = df['Average_cost'].rolling(window=window).std()
+    
+    # Handle missing values if necessary
+    df = df.dropna()
+
+    return df'''
+
+# Execute the code to define the function
+exec(code)
+
+# Raw dataset as a string
+raw_dataset = '''Period,Revenue,Sales_quantity,Average_cost,The_average_annual_payroll_of_the_region
+01.01.2015,16010072.1195,12729,1257.76354148008,30024676
+01.02.2015,15807587.449808,11636,1358.50699981162,30024676
+01.03.2015,22047146.023644,15922,1384.69702447205,30024676
+01.04.2015,18814583.29428,15227,1235.60670481907,30024676
+01.05.2015,14021479.611678,8620,1626.62176469582,30024676
+01.06.2015,16783928.522112,13160,1275.37450775927,30024676
+01.07.2015,19161892.194872,17254,1110.57680508126,30024676
+01.08.2015,15204984.296742,8642,1759.4288702548,30024676
+01.09.2015,20603939.9751,16144,1276.25990926041,30024676
+01.10.2015,20992874.780136,18135,1157.58890433615,30024676
+01.11.2015,14993369.65763,10841,1383.02459714325,30024676
+01.12.2015,27791807.639848,22113,1256.80855785502,30024676
+01.01.2016,28601586.496,15365,1861.4765047836,27828571
+01.02.2016,22367074.065584,13153,1700.53022622854,27828571
+01.03.2016,29738608.568,18339,1621.60469862043,27828571
+01.04.2016,28351007.9388,13909,2038.3210826659,27828571
+01.05.2016,15264603.734865,8553,1784.70755698176,27828571
+01.06.2016,24385658.077056,15101,1614.83730064605,27828571
+01.07.2016,29486517.069955,15695,1878.72042497324,27828571
+01.08.2016,15270117.2565,8314,1836.67515714457,27828571
+01.09.2016,36141027.562,17764,2034.50954526008,27828571
+01.10.2016,27915143.655,18969,1471.61914992883,27828571
+01.11.2016,21272049.3454,13433,1583.56654101094,27828571
+01.12.2016,42014159.88396,27029,1554.41044374413,27828571
+01.01.2017,36007380.67,16889,2132.00193439517,27406473
+01.02.2017,30396775.3784,15864,1916.08518522441,27406473
+01.03.2017,47678130.72603,22786,2092.43091047266,27406473
+01.04.2017,27013964.728324,17910,1508.31740526655,27406473
+01.05.2017,24948844.698,10777,2315.00832309548,27406473
+01.06.2017,31101345.543,18799,1654.4148913772,27406473
+01.07.2017,33848822.228544,17899,1891.10130334343,27406473
+01.08.2017,16454666.958,9649,1705.32355249249,27406473
+01.09.2017,31650092.652,20159,1570.02295014634,27406473
+01.10.2017,31572205.6224,19519,1617.51143103643,27406473
+01.11.2017,22446371.0268,15360,1461.35228039063,27406473
+01.12.2017,44966125.7696,30833,1458.37660200435,27406473
+01.01.2018,44067520.858,19812,2224.28431546538,28197847
+01.02.2018,36020287.1553,18424,1955.07420512918,28197847
+01.03.2018,46995990.4125,29004,1620.32790003103,28197847
+01.04.2018,35536487.6848,22033,1612.87558139155,28197847
+01.05.2018,29699599.176,14959,1985.40003850525,28197847
+01.06.2018,33261065.3886,23067,1441.93286463779,28197847
+01.07.2018,35826534.9072,18397,1947.41180122846,28197847
+01.08.2018,23268655.2112,12045,1931.81031226235,28197847
+01.09.2018,35423489.85,23358,1516.54635884922,28197847
+01.10.2018,39831565.6974,22644,1759.03399122946,28197847
+01.11.2018,32999145.2096,19765,1669.57476395649,28197847
+01.12.2018,47221828.2018,33207,1422.04439430843,28197847
+01.01.2019,36459960.091485,24096,1513.11255359749,29878525
+01.02.2019,36546498.663015,21624,1690.08965330258,29878525
+01.03.2019,54198706.7196,33379,1623.7366823332,29878525
+01.04.2019,32743989.6056,22265,1470.64853382439,29878525
+01.05.2019,32531657.5397,16967,1917.34882652797,29878525
+01.06.2019,47709701.6346,24958,1911.59955263242,29878525
+01.07.2019,45992141.57398,21917,2098.46884035133,29878525
+01.08.2019,36933665.022,14431,2559.32818390964,29878525
+01.09.2019,48526260.1344,23253,2086.88169846471,29878525
+01.10.2019,44160416.1824,26603,1659.9788062399,29878525
+01.11.2019,36374956.4944,21987,1654.38470434348,29878525
+01.12.2019,58756473.6608,38069,1543.42046444088,29878525
+01.01.2020,56288300.87,27184,2070.64085013243,29044998
+01.02.2020,40225243.264,23509,1711.05718082437,29044998
+01.03.2020,50022165.2325,32569,1535.88274839571,29044998
+01.04.2020,52320692.9428,26615,1965.83479026113,29044998
+01.05.2020,,,,
+01.06.2020,,,,
+01.07.2020,,,,
+01.08.2020,,,,
+01.09.2020,,,,
+01.10.2020,,,,
+01.11.2020,,,,
+01.12.2020,,,,
+01.01.2021,,,,
+01.02.2021,,,,
+01.03.2021,,,,
+01.04.2021,,,,
+01.05.2021,,,,
+01.06.2021,,,,
+01.07.2021,,,,
+01.08.2021,,,,
+01.09.2021,,,,
+01.10.2021,,,,
+01.11.2021,,,,
+01.12.2021,,,,
+01.01.2022,,,,
+01.02.2022,,,,
+01.03.2022,,,,
+01.04.2022,,,,
+01.05.2022,,,,
+01.06.2022,,,,
+01.07.2022,,,,
+01.08.2022,,,,
+01.09.2022,,,,
+01.10.2022,,,,
+01.11.2022,,,,
+01.12.2022,,,,'''
+
+# Convert the raw dataset string into a pandas DataFrame
+df = pd.read_csv(StringIO(raw_dataset), delimiter=',')
+
+# Apply the feature_engineering function to the DataFrame
+processed_df = feature_engineering(df)
+
+# Display the processed dataset
+print(processed_df)
+
+
+app\temp\training_task.py:
+from app.ai.models.classification.implementations.lightgbm_classifier import LightgbmClassifier
+from app.ai.data_preprocessing import DataPreprocessing 
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+from app.ai.models.regression.implementations.lightgbm_regerssor import LightGBMRegressor
+from app.ai.models.regression.ensemble.ensemble import Ensemble as RegressionEnsemble
+from app.ai.models.classification.ensemble.ensemble import Ensemble as ClassificationEnsemble
+from app.services.report_file_service import ReportFileService
+from app.tasks.llm_task import LlmTask
+
+class TrainingTask:
+    def __init__(self) -> None:
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.data_preprocessing = DataPreprocessing()
+        self.reportFileTask = ReportFileService()
+        self.llm_task = LlmTask()
+
+    def run_task(self, model, headers, df, task_callback, app_context):
+        is_training_successfully_finished = False
+        trained_model = None
+        evaluations = None
+        encoding_rules = None
+        transformations = None
+        try:
+            if model.training_strategy == 'ensembleModelsFast' or model.training_strategy == 'ensembleModelsTuned':
+                trained_model, evaluations, encoding_rules, transformations = self.__train_multi_models(model, df.copy())
+            else:
+                trained_model, evaluations, encoding_rules, transformations = self.__train_single_model(model, df.copy())
+            is_training_successfully_finished = True
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        finally:
+            try:
+                model.formated_evaluations = evaluations['formated_evaluations']
+                model.train_score = evaluations['train_score']
+                model.test_score = evaluations['test_score']
+                task_callback(df, model, trained_model, encoding_rules, transformations,  headers, is_training_successfully_finished, app_context)
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+
+    def __train_single_model(self, model, df):
+        df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+        metric = model.metric
+        if model.model_type == 'classification':
+            training_model = LightgbmClassifier(train_df = df, target_column = model.target_column, scoring=model.metric, 
+                                                sampling_strategy=model.sampling_strategy)
+            evaluate = self.classificationEvaluate
+
+        elif model.model_type == 'regression':
+            training_model = LightGBMRegressor(train_df = df, target_column = model.target_column, scoring=model.metric)
+            evaluate = self.regressionEvaluate
+            metric = evaluate.get_metric_mapping(model.metric)
+
+        if model.training_strategy == 'singleModelTuned':
+            training_model.tune_hyper_parameters()
+
+        trained_model = training_model.train()
+        evaluations = evaluate.evaluate_train_and_test(trained_model, training_model)
+        formated_evaluations = evaluate.format_train_and_test_evaluation(evaluations)
+        print(formated_evaluations)
+
+        train_score = evaluations['train_metrics'][metric]
+        test_score = evaluations['test_metrics'][metric]
+        evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+        
+        return trained_model, evaluations, None, None
+        
+
+    def __train_multi_models(self, model, df):
+        if model.model_type == 'classification':
+            df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+            ensemble = ClassificationEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True, apply_encoding_rules=True,
+                                              create_transformations=True, apply_transformations=True,
+                                              sampling_strategy=model.sampling_strategy, scoring=model.metric)
+            ensemble.create_models(df)
+            ensemble.sort_models_by_score()
+            ensemble.create_voting_classifier()
+            if model.training_strategy == 'ensembleModelsTuned':
+                ensemble.tuning_top_models()
+            ensemble.train_voting_classifier()
+            ensemble.evaluate_voting_classifier()
+
+            evaluate = self.classificationEvaluate
+            formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_classifier_evaluations)
+            print(formated_evaluations)
+            train_score = ensemble.voting_classifier_evaluations['train_metrics'][model.metric]
+            test_score = ensemble.voting_classifier_evaluations['test_metrics'][model.metric]
+            evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+            
+            return ensemble.trained_voting_classifier, evaluations, ensemble.encoding_rules, ensemble.transformations
+        
+        if model.model_type == 'regression':
+            try:
+                df = self.__data_preprocessing(df, model)
+                ensemble = RegressionEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True,
+                                            apply_encoding_rules=True, create_transformations=True, apply_transformations=True, scoring=model.metric)
+                ensemble.create_models(df)
+                ensemble.sort_models_by_score()
+
+                ensemble.create_voting_regressor()
+                if model.training_strategy == 'ensembleModelsTuned':
+                    ensemble.tuning_top_models()
+                ensemble.train_voting_regressor()
+                ensemble.evaluate_voting_regressor()
+
+                evaluate = self.regressionEvaluate
+                formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_regressor_evaluations)
+                print(formated_evaluations)
+                metric = self.regressionEvaluate.get_metric_mapping(model.metric)
+                train_score = ensemble.voting_regressor_evaluations['train_metrics'][metric]
+                test_score = ensemble.voting_regressor_evaluations['test_metrics'][metric]
+                evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+                
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+            return ensemble.trained_voting_regressor, evaluations, ensemble.encoding_rules, ensemble.transformations
+            
+        
+    def __data_preprocessing(self, df, model, fill_missing_numeric_cells=False):
+        df_copy=df.copy()
+        if model.is_time_series:
+            df_copy, model.time_series_code = self.llm_task.use_llm_toproccess_timeseries_dataset(df_copy, model.target_column)
+        data_preprocessing = DataPreprocessing()
+        df_copy = data_preprocessing.sanitize_dataframe(df_copy)
+        if fill_missing_numeric_cells:
+            df_copy = data_preprocessing.fill_missing_numeric_cells(df_copy)
+        df_copy = self.data_preprocessing.convert_tdatetime_columns_to_datetime_dtype(df_copy)
+        return df_copy 
+
+
+    
+
+
+app\utils\utils.py:
+import pandas as pd
+import os
+
+
+file_path = f'datasets/calssification/titanic.csv'
+df = pd.read_csv(file_path)
+df = df[df.columns.drop('Survived')]
+df.to_csv('datasets/calssification/titanic_no_y.csv')

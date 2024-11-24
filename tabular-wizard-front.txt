@@ -1,0 +1,2015 @@
+src\index.jsx:
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './app/App';
+import reportWebVitals from './reportWebVitals';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+// If you want to start measuring performance in your app, pass a function
+// to log results (for example: reportWebVitals(console.log))
+// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+reportWebVitals();
+
+
+src\ai\consts.jsx:
+export const trainingStrategyOptions = {
+    'singleModelFast': 'Single Model Fast',
+    'singleModelTuned': 'Single Model Tuned',
+    'ensembleModelsFast': 'Ensemble Models Fast',
+    'ensembleModelsTuned': 'ensemble Models Tuned'
+};
+
+export const samplingStrategyOptions = {
+    'conditionalOversampling': 'Oversample if Major Class > 2x Minor Class',
+    'oversampling': 'Oversampling',
+    'dontOversample': 'Don\'t Oversample'
+    
+}
+
+export const metricsRegressionOptions = {
+    'r2': 'R2 - R-squared (R2)',
+    'neg_root_mean_squared_error': 'RMSE - Root Mean Squared error',
+    'neg_mean_squared_error': 'MSE - Mean Squared Error',
+    'neg_mean_absolute_error': 'MAE - Mean Absolute Error',
+    'neg_mean_absolute_percentage_error': 'MAPE - Mean Absolute Percentage Error'
+};
+
+export const metricsclassificationOptions = {
+    'accuracy': 'accuracy',
+    'f1': 'f1',
+    'log_loss': 'log loss',
+    'roc_auc': 'roc auc',
+    'recall': 'recall',
+    'precision': 'precision'
+};
+
+
+src\ai\DataserGrid.jsx:
+import React, { useState } from 'react';
+import {
+    Grid, Select, MenuItem, FormControl, Tooltip, Typography
+} from '@mui/material';
+import { DataGrid } from '@mui/x-data-grid';
+import { v4 as uuidv4 } from 'uuid';
+
+const CustomColumnHeader = ({ column }) => {
+    const [value, setValue] = useState('');
+
+    const handleChange = (event) => {
+        setValue(event.target.value);
+        // You can perform additional actions here based on the selection
+    };
+
+    return (
+        <div style={{   display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        paddingTop: '4px', // Corrected padding
+        paddingBottom: '4px' // Corrected padding 
+    }}>
+            <Tooltip title={column.headerName} enterDelay={300}>
+                <Typography variant="subtitle1" noWrap>
+                    {column.headerName}
+                </Typography>
+            </Tooltip>
+            <FormControl size="small" style={{ marginTop: '8px' }}>
+                <Select
+                    value={value || 'raw'}
+                    onChange={handleChange}
+                    displayEmpty
+                    size="small"
+                    style={{ fontSize: '0.8rem' }}
+                >
+                    {/* <MenuItem value="" disabled>Options</MenuItem> */}
+                    <MenuItem value={'raw'}>Use column data</MenuItem>
+                    {/* TODU: Add encryption logic*/}
+                    {/* <MenuItem value={'data_encrypt'}>Encrypt column data</MenuItem>
+        <MenuItem value={'column_name_encrypt'}>Encrypt column name</MenuItem>
+        <MenuItem value={'data_and_column_name_encrypt'}>Encrypt column name and data</MenuItem> */}
+                    <MenuItem value={'ignore'}>Don't use column data</MenuItem>
+                </Select>
+            </FormControl>
+        </div>
+    );
+};
+
+const mapColumnsInGrid = (columns) => {
+    return columns.map((column) => {
+        return {
+            field: column,
+            headerName: column,
+            minWidth: 250, // Minimum width for each column
+            flex: 1, // Allow columns to grow to fill available space
+            renderHeader: (params) => <CustomColumnHeader column={params.colDef} />
+        };
+    });
+};
+
+const convertMatrixToDictArray = (matrix) => {
+    // Extract the headers from the first row
+    const headers = matrix[0];
+    // Map each row to an object, starting from the second row
+    return matrix.slice(1).map(row => {
+        // Reduce the current row into an object, where each header is a key
+        return row.reduce((accumulator, currentValue, currentIndex) => {
+            accumulator[headers[currentIndex]] = currentValue;
+            return accumulator;
+        }, {});
+    });
+}
+
+export const DatasetGrid = ({ state }) => {
+    const [pageSize] = useState(5);
+    return <Grid container spacing={2}>
+        <Grid item xs={12}>
+            <div style={{ height: 400, width: '100%' }}>
+                <DataGrid getRowId={(row) => uuidv4()}
+                    initialState={{
+                        pagination: { paginationModel: { pageSize: pageSize } },
+                    }}
+                    pageSizeOptions={[5, 10, 25]}
+                    rows={convertMatrixToDictArray(state.data)}
+                    columns={mapColumnsInGrid(state.columns)}
+                    columnHeaderHeight={86} // Set the header height to a larger value if needed
+                    rowHeight={46} // Make sure the row height can accommodate content
+                    sx={{
+                        '& .MuiDataGrid-root': {
+                            width: '100%',
+                        },
+                        '& .MuiDataGrid-columnHeader, & .MuiDataGrid-cell': {
+                            lineHeight: 'normal',
+                            display: 'flex', // Use flexbox for alignment
+                            alignItems: 'center', // Center-align vertically
+                            justifyContent: 'center', // Center-align horizontally
+                            textAlign: 'center', // Center-align text
+                            borderRight: '1px solid rgba(224, 224, 224, 1)', // Vertical lines
+                        },
+                        '& .MuiDataGrid-columnHeaders': {
+                            padding: '0', // Remove padding to align with cell border
+                            backgroundColor: 'white',
+                        },
+                        '& .MuiDataGrid-columnHeaderTitleContainer': {
+                            justifyContent: 'center', // Center-align the header content
+                        },
+                        '& .MuiDataGrid-iconSeparator': {
+                            display: 'none', // Hide the icon separator in the header
+                        },
+                        '& .MuiDataGrid-columnHeaderTitle': {
+                            fontWeight: 'bold',
+                            overflow: 'visible', // Allow the title to take up more space if needed
+                            whiteSpace: 'normal', // Allow wrapping
+                        },
+                        '& .MuiDataGrid-columnHeaderSortable': {
+                            // Increase padding to account for the space the sort icon would take
+                            paddingRight: theme => theme.spacing(2),
+                        },
+                    }}
+                />
+            </div>
+        </Grid>
+    </Grid>
+};
+
+src\ai\Inference.jsx:
+import React, { useState, useEffect } from 'react'
+import { handleMakeRequest } from '../app/RequestNavigator';
+import { useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import { List, ListItem, ListItemText, Paper, Typography } from '@mui/material'
+import {  DescriptionInput, ModelTypeRadioGroup, TrainingStrategySelect, SamplingStrategySelect, UploadFile, MetricSelect, TitleView }
+    from './ModelFormComponents';
+import {
+    Container, Grid, Box
+} from '@mui/material';
+import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
+import { LoadingButton } from '@mui/lab';
+import { trainingStrategyOptions, samplingStrategyOptions, metricsRegressionOptions, metricsclassificationOptions } from './consts'
+import { InfrenceIcon } from '../icons/InferenceIcon'
+
+
+const getModelDetails = async (navigate, modelName) => {
+    try {
+        const response = await handleMakeRequest(navigate, `/api/model?model_name=${modelName}`, 'GET', null, {}, true);
+        if (response.status !== 200) {
+            throw new Error('Server responded with an error!');
+        }
+        return response;
+    } catch (error) {
+        console.error("Failed to fetch AI model: ", error);
+        return [];
+    }
+};
+
+const Inference = () => {
+    const [searchParams] = useSearchParams();
+    const modelName = searchParams.get('model');
+    const navigate = useNavigate();
+
+    const [state, setState] = useState({
+        columns: [],
+        data: [],
+        datasetError: '',
+        isLoading: false,
+        isSubmitting: false,
+        model: {},
+        fileName: '',
+        fileSize: 0,
+    });
+
+    const validateDataset = () => {
+        if (state.data.length === 0) {
+            setState(prev => ({ ...prev, datasetError: 'Please upload a dataset file.' }));
+        } else {
+            const { columns, target_column } = state.model;
+            const dataColumns = state.data[0];
+
+            // Filter out the target column from columns
+            const requiredColumns = columns.filter(column => column !== target_column);
+
+            // Check if all required columns are present in jsonData[0]
+            const containsAllColumns = requiredColumns.every(column => dataColumns.includes(column));
+            if (containsAllColumns) {
+                setState(prev => ({ ...prev, datasetError: '' }));
+            } else {
+                setState(prev => ({ ...prev, datasetError: "Dataset doesn't contains all model columns" }));
+            }
+
+        }
+
+    };
+
+
+    useEffect(() => {
+        const fetchData = async () => {
+            validateDataset();
+            // if (state.fileName === '') {
+            //     setState(prev => ({ ...prev, columns: [], columnOptions: {} }));
+            // } else {
+            const response = await getModelDetails(navigate, modelName);
+            const modelData = response.data.model;
+            setState(prev => ({ ...prev, model: modelData }));
+            // console.log(modelData);
+            //}
+        };
+
+        fetchData();
+    }, [state.datasetError, state.data, state.fileName]);
+
+    function updateData(jsonData) {
+        setState(prev => ({
+            ...prev,
+            columns: jsonData[0],
+            data: jsonData,
+            isLoading: false,
+        }));
+    }
+
+    const handleRemoveFile = (fileInputRef) => {
+        // Ensure that the function can be called with fileInputRef as a parameter
+        if (fileInputRef && fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+        setState(prev => ({ ...prev, fileName: '', fileSize: 0, data: [] }));
+    };
+
+    const handleSubmit = async () => {
+        setState(prev => ({ ...prev, isSubmitting: true }));
+        try {
+            const inferenceDataMatrix = [];
+            Object.keys(state.data).forEach(key => {
+                inferenceDataMatrix.push(state.data[key]);
+            });
+            const payload = {
+                dataset: state.data,
+                modelName: modelName,
+                fileName: state.fileName
+            };
+
+            const response = await handleMakeRequest(navigate, '/api/inference/', 'POST', payload, {}, true);
+            console.log(response.data);
+        } catch (error) {
+            console.error('Error submitting the data:', error);
+        }
+        setState(prev => ({ ...prev, isSubmitting: false }));
+    };
+
+
+    // Add custom styling here
+    const containerStyles = {
+        marginTop: '4px', // Adjust the top margin
+        marginRight: '16px', // Adjust the right margin
+    };
+
+    const gridItemStyles = {
+        padding: '8px', // Provides spacing inside each grid item
+    };
+
+
+    return (
+        <Box sx={{ p: 1 }}>
+            <Container maxWidth={false} sx={containerStyles}>
+                <TitleView titleText="Inference" IconComponent={InfrenceIcon} />
+                <Grid container spacing={3}>
+                    <Grid item xs={2} sx={gridItemStyles}>
+                        <DescriptionInput label="" value={modelName} />
+                    </Grid>
+                    <Grid item xs={4} sx={gridItemStyles}>
+                        <DescriptionInput
+                            readOnly={true}
+                            value={state.model.description}
+                            label=""
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <UploadFile loading={state.isLoading}
+                            state={state}
+                            updateData={updateData}
+                            handleRemoveFile={handleRemoveFile}
+                            setState={setState}
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <Grid container justifyContent="center" sx={{ mt: 4 }}>
+                            <Grid item xs={12} md={8} lg={6}>
+                                <Paper elevation={3} sx={{ maxHeight: 230, overflow: 'auto', p: 2 }}>
+                                    <Typography variant="h6" gutterBottom>
+                                        Model: {modelName}
+                                    </Typography>
+                                    <Typography variant="h6" gutterBottom>
+                                        Target column: {state.model.target_column}
+                                    </Typography>
+                                    <List>
+                                        {state.model.columns &&
+                                            state.model.columns.map((column, index) => (
+                                                <ListItem key={index}>
+                                                    <ListItemText primary={column} />
+                                                </ListItem>
+                                            ))}
+                                    </List>
+                                </Paper>
+                            </Grid>
+                        </Grid>
+                    </Grid>
+                    <Grid item xs={2}>
+                        <DescriptionInput
+                            label={""}
+                            value={state.model.target_column}
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <Grid container spacing={8} alignItems="center">
+                            <Grid item>
+                                <ModelTypeRadioGroup
+                                    readOnly={true}
+                                    value={state.model.model_type || ''}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                model_type: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid>
+                            {/* <Grid item>
+                                <TrainingSpeedRadioGroup
+                                    readOnly={true}
+                                    value={state.model.training_speed || ''}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                training_speed: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid>
+                            <Grid item>
+                                <ModelEnsembleRadioGroup
+                                    readOnly={true}
+                                    value={state.model.ensemble || ''}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                ensemble: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid> */}
+                            <Grid item xs={2}>
+                                <TrainingStrategySelect
+                                    readOnly={true}
+                                    value={state.model.training_strategy || ''}
+                                    trainingStrategies={trainingStrategyOptions}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                trainingStrategy: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid>
+                            {state.model.model_type === "classification" && <Grid item xs={2}>
+                                <SamplingStrategySelect
+                                    readOnly={true}
+                                    value={state.model.sampling_strategy || ''}
+                                    samplingStrategies={samplingStrategyOptions}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                ensemble: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid>}
+                            {state.model.model_type && <Grid item xs={2}>
+                                <MetricSelect
+                                    readOnly={true}
+                                    metrics={state.model.model_type === "regression" ? metricsRegressionOptions : state.model.model_type === "classification" ? metricsclassificationOptions : {}}
+                                    value={state.model.metric || ''}
+                                    onChange={(event) =>
+                                        setState((prev) => ({
+                                            ...prev,
+                                            model: {
+                                                ...prev.model,
+                                                metric: event.target.value,
+                                            },
+                                        }))
+                                    }
+                                />
+                            </Grid>}
+                        </Grid>
+                    </Grid>
+                    <Box sx={{ p: 1 }}>
+                        <Container maxWidth={false} sx={containerStyles}>
+                            {state.datasetError &&
+                                // <div>{state.datasetError}</div>
+                                <Alert severity="error" sx={{ mb: 2 }}>
+                                    <AlertTitle>Please fulfill these requirements!</AlertTitle>
+                                    <div>{state.datasetError}</div>
+
+                                </Alert>
+                            }
+                            <Grid container spacing={1}>
+                                {/* ... */}
+                            </Grid>
+                        </Container>
+                    </Box>
+                    <Grid item xs={12}>
+                        <LoadingButton
+                            variant="contained"
+                            color="primary"
+                            onClick={handleSubmit}
+                            disabled={!!state.datasetError}
+                        >
+                            Inference
+                        </LoadingButton>
+                    </Grid>
+                </Grid>
+            </Container>
+        </Box>
+    );
+}
+
+export default Inference
+
+src\ai\ModelFormComponents.jsx:
+import React from 'react';
+import {
+    Paper, TableContainer, Table, TableHead, TableRow, TableCell, TableBody, TextField, IconButton, Select, MenuItem,
+    FormControl, Radio, RadioGroup, InputLabel, FormControlLabel, Typography, TablePagination
+} from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { LoadingButton } from '@mui/lab'
+import ExcelJS from 'exceljs';
+import Papa from 'papaparse';
+import './ModelFormComponents.css';
+
+
+// View title
+export const TitleView = ({ titleText, IconComponent }) => (
+    <div className="title-container">
+        {IconComponent && <div className="title-icon"> <IconComponent  /></div>}
+        <Typography variant="h5" gutterBottom className="title">
+            {titleText}
+        </Typography>
+    </div>
+);
+
+
+// Model Name Input
+export const ModelNameInput = ({ value, onChange, readOnly = false }) => (
+    <TextField
+        required
+        fullWidth
+        name="modelName"
+        label="Model Name"
+        value={value}
+        onChange={onChange}
+        InputProps={{ readOnly }}
+    />
+);
+
+// Description Input
+export const DescriptionInput = ({ value, onChange, label = '', readOnly = false }) => (
+    <TextField
+        fullWidth
+        name="description"
+        label={label}
+        value={value}
+        onChange={onChange}
+        InputProps={{ readOnly }}
+    />
+);
+
+// Target Column Select
+export const TargetColumnSelect = ({ columns, value, onChange, readOnly = false }) => (
+    <FormControl fullWidth>
+        <InputLabel id="target-column-label">Target Column</InputLabel>
+        <Select
+            name="targetColumn"
+            labelId="target-column-label"
+            id="target-column-select"
+            value={value}
+            label="Target Column"
+            onChange={onChange}
+            readOnly={readOnly}
+        >
+            {columns.map((col, index) => (
+                <MenuItem key={index} value={col}>{col}</MenuItem>
+            ))}
+        </Select>
+    </FormControl>
+);
+
+// Metric Select
+export const MetricSelect = ({ metrics, value, onChange, readOnly = false }) => (
+    <FormControl fullWidth>
+        <InputLabel id="target-column-label">Metric</InputLabel>
+        <Select
+            name="metric"
+            labelId="metric-select-label"
+            id="metric-select"
+            value={value}
+            label="Metric"
+            onChange={onChange}
+            readOnly={readOnly}
+        >
+            {Object.keys(metrics).map((key) => (
+                <MenuItem key={key} value={key}>{metrics[key]}</MenuItem>
+            ))}
+        </Select>
+    </FormControl>
+);
+
+// Training Strateg Select
+export const TrainingStrategySelect = ({ trainingStrategies, value, onChange, readOnly = false }) => (
+    <FormControl fullWidth>
+        <InputLabel id="training-strategy-label">Training Strategy</InputLabel>
+        <Select
+            name="trainingStrategy"
+            labelId="training-strategy-label"
+            id="training-strategy-select"
+            value={value}
+            label="Training Strategy"
+            onChange={onChange}
+            readOnly={readOnly}
+        >
+            {Object.keys(trainingStrategies).map((key) => (
+                <MenuItem key={key} value={key}>{trainingStrategies[key]}</MenuItem>
+            ))}
+        </Select>
+    </FormControl>
+);
+
+// Sampling Strateg Select
+export const SamplingStrategySelect = ({ samplingStrategies, value, onChange, readOnly = false }) => (
+    <FormControl fullWidth>
+        <InputLabel id="sampling-strategy-label">Sampling Strategy</InputLabel>
+        <Select
+            name="samplingStrategy"
+            labelId="sampling-strategy-label"
+            id="sampling-strategy-select"
+            value={value}
+            label="Sampling Strategy"
+            onChange={onChange}
+            readOnly={readOnly}
+        >
+            {Object.keys(samplingStrategies).map((key) => (
+                <MenuItem key={key} value={key}>{samplingStrategies[key]}</MenuItem>
+            ))}
+        </Select>
+    </FormControl>
+);
+
+
+// Model Type Radio Group
+export const ModelTypeRadioGroup = ({ value, onChange, readOnly = false }) => (
+    <FormControl component="fieldset">
+        <RadioGroup row aria-label="model-type" name="modelType" value={value} onChange={onChange}>
+            <FormControlLabel value="regression" control={<Radio />} label="Regression" disabled={readOnly} />
+            <FormControlLabel value="classification" control={<Radio />} label="Classification" disabled={readOnly} />
+        </RadioGroup>
+    </FormControl>
+);
+
+// Training Speed Radio Group
+export const TrainingSpeedRadioGroup = ({ value, onChange, readOnly = false }) => (
+    <FormControl component="fieldset">
+        <RadioGroup row aria-label="training-speed" name="trainingSpeed" value={value} onChange={onChange}>
+            <FormControlLabel value="fast" control={<Radio />} label="Fast Training" disabled={readOnly} />
+            <FormControlLabel value="slow" control={<Radio />} label="Slow Training But More Accurate" disabled={readOnly} />
+        </RadioGroup>
+    </FormControl>
+);
+
+// Model Ensemble Radio Group
+export const ModelEnsembleRadioGroup = ({ value, onChange, readOnly = false }) => (
+    <FormControl component="fieldset">
+        <RadioGroup row aria-label="model-ensemble" name="modelEnsemble" value={value} onChange={onChange}>
+            <FormControlLabel value="single" control={<Radio />} label="Single Model" disabled={readOnly} />
+            <FormControlLabel value="multi" control={<Radio />} label="Multi Models" disabled={readOnly} />
+        </RadioGroup>
+    </FormControl>
+);
+
+export const UploadFile = ({ state, updateData, setState, loading, handleRemoveFile }) => {
+    const fileInputRef = React.createRef();
+
+    const handleFileChange = async (e) => {
+        const files = e.target.files;
+        if (files && files[0]) {
+            const file = files[0];
+            setState(prev => ({ ...prev, isLoading: true }));
+            setState(prev => ({ ...prev, fileName: file.name, fileSize: file.size, targetColumn: '' }));
+
+            if (file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    const arrayBuffer = evt.target.result;
+                    const workbook = new ExcelJS.Workbook();
+                    await workbook.xlsx.load(arrayBuffer);
+                    const worksheet = workbook.worksheets[0];
+
+                    const jsonData = [];
+                    worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+                        const rowData = [];
+                        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                            if (cell.type === ExcelJS.ValueType.Date) {
+                                rowData.push(`${cell.value.getFullYear()}-${('0' + (cell.value.getMonth() + 1)).slice(-2)}-${('0' + cell.value.getDate()).slice(-2)}`);
+                            } else if (typeof cell.value === 'string') {
+                                rowData.push(cell.value.trim());
+                            } else {
+                                rowData.push(cell.value);
+                            }
+                        });
+                        jsonData.push(rowData);
+                    });
+
+                    if (jsonData.length > 0) {
+                        const headers = jsonData[0];
+                        const validIndexes = headers.map((header, index) => header ? index : null).filter(index => index != null);
+                        const filteredData = jsonData.map(row =>
+                            row.filter((_, index) => validIndexes.includes(index))
+                        );
+
+                        updateData(filteredData);
+                    }
+
+                    setState(prev => ({ ...prev, isLoading: false }));
+                };
+                reader.onerror = () => {
+                    console.error('Error reading file');
+                    setState(prev => ({ ...prev, isLoading: false }));
+                };
+                reader.readAsArrayBuffer(file);
+            } else if (file.type === "text/csv") {
+                Papa.parse(file, {
+                    complete: (result) => {
+                        const jsonData = result.data.map(row =>
+                            row.map(cell => {
+                                // Check if the cell is a valid number and return as a number
+                                if (!isNaN(cell) && cell.trim() !== '') {
+                                    return Number(cell);
+                                }
+                                if (typeof cell === 'string') {
+                                    return cell.trim();
+                                } else {
+                                    return cell;
+                                }
+                            })
+                        );
+
+                        // Filter out empty rows
+                        const filteredJsonData = jsonData.filter(row => row.some(cell => cell !== ''));
+
+                        if (filteredJsonData.length > 0) {
+                            const headers = filteredJsonData[0];
+                            const validIndexes = headers.map((header, index) => header ? index : null).filter(index => index != null);
+                            const filteredData = filteredJsonData.map(row =>
+                                row.filter((_, index) => validIndexes.includes(index))
+                            );
+
+                            updateData(filteredData);
+                        }
+
+                        setState(prev => ({ ...prev, isLoading: false }));
+                    },
+                    error: (error) => {
+                        console.error('Error parsing CSV file', error);
+                        setState(prev => ({ ...prev, isLoading: false }));
+                    }
+                });
+            } else {
+                console.error('Unsupported file type');
+                setState(prev => ({ ...prev, isLoading: false }));
+            }
+        }
+    };
+
+    return (
+        <div>
+            <LoadingButton
+                variant="contained"
+                component="label"
+                loading={loading}
+            >
+                Upload File
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handleFileChange}
+                />
+            </LoadingButton>
+            {state.fileName && (
+                <div style={{ marginTop: 5, display: 'flex', alignItems: 'center' }}>
+                    <Typography variant="subtitle1">
+                        File selected: {state.fileName}
+                    </Typography>
+                    <IconButton onClick={() => handleRemoveFile(fileInputRef)} aria-label="delete">
+                        <DeleteIcon />
+                    </IconButton>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
+export const DatasetContent = ({ state, renderColumnOptions, handleChangePage, handleChangeRowsPerPage }) => (
+    <TableContainer component={Paper} sx={{ maxHeight: 327, overflow: 'auto' }}>
+        <Table stickyHeader aria-label="sticky table">
+            <TableHead>
+                <TableRow sx={{ borderTop: '2px solid rgba(224, 224, 224, 1)' }}>
+                    {state.columns.map((col, index) => (
+                        <TableCell
+                            key={index}
+                            sx={{ 
+                                borderRight: index < state.columns.length - 1 ? '1px solid rgba(224, 224, 224, 1)' : 'none',
+                                borderTop: '2px solid rgba(224, 224, 224, 1)' // Add a thicker top border for visibility
+                            }}
+                        >
+                            <Typography variant="h6">{col}</Typography>
+                            {renderColumnOptions(index)}
+                        </TableCell>
+                    ))}
+                </TableRow>
+            </TableHead>
+            <TableBody>
+                {state.data
+                    .slice(1)
+                    .slice((state.currentPage - 1) * state.rowsPerPage, state.currentPage * state.rowsPerPage)
+                    .map((row, rowIndex) => (
+                        <TableRow key={rowIndex}>
+                            {row.map((cell, cellIndex) => (
+                                <TableCell
+                                    key={cellIndex}
+                                    sx={{ 
+                                        borderRight: cellIndex < row.length - 1 ? '1px solid rgba(224, 224, 224, 1)' : 'none' 
+                                    }}
+                                >
+                                    {cell}
+                                </TableCell>
+                            ))}
+                        </TableRow>
+                    ))}
+            </TableBody>
+        </Table>
+        {state.data.length > 0 && <TablePagination
+            rowsPerPageOptions={[5, 10, 25]}
+            component="div"
+            count={state.data.length}
+            rowsPerPage={state.rowsPerPage}
+            page={state.currentPage - 1} // Subtract 1 for zero-indexed page prop
+            onPageChange={handleChangePage}
+            onRowsPerPageChange={handleChangeRowsPerPage} />}
+    </TableContainer>
+)
+
+
+
+
+src\ai\TrainModel.jsx:
+import React, { useState, useEffect } from 'react';
+import {
+    Container, Grid, Select, MenuItem,
+    FormControl, InputLabel, Box, Checkbox, FormControlLabel
+} from '@mui/material';
+import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
+import { LoadingButton } from '@mui/lab';
+import { handleMakeRequest } from '../app/RequestNavigator';
+import { useNavigate } from 'react-router-dom';
+import { TrainModelIcon } from '../icons/TrainModelIcon';
+
+import {
+    ModelNameInput, DescriptionInput, TargetColumnSelect, MetricSelect, TrainingStrategySelect, SamplingStrategySelect,
+    ModelTypeRadioGroup, UploadFile, DatasetContent, TitleView
+} from './ModelFormComponents';
+
+import { trainingStrategyOptions, samplingStrategyOptions, metricsRegressionOptions, metricsclassificationOptions } from './consts';
+
+const ROWS_PER_PAGE = 5; // Set the number of rows per page
+const INITIAL_PAGE = 1;
+
+function TrainModel() {
+    const [state, setState] = useState({
+        modelName: '',
+        description: '',
+        data: [],
+        columns: [],
+        targetColumn: '',
+        modelType: '',
+        columnOptions: {},
+        currentPage: 1,
+        rowsPerPage: ROWS_PER_PAGE,
+        isLoading: false,
+        isSubmitting: false,
+        datasetError: '', // Error message for dataset
+        modelNameError: '', // Error message for modelName
+        modelTypeError: '',
+        targetColumnError: '',
+        fileName: '',
+        fileSize: 0,
+        metric: '',
+        trainingStrategy: 'ensembleModelsFast',
+        samplingStrategy: 'dontOversample',
+        isTimeSeries: false,
+    });
+
+    const navigate = useNavigate();
+
+    const isValidSubmission = () => {
+        return !state.datasetError && !state.modelNameError && !state.modelTypeError && !state.targetColumnError;
+    };
+
+    const handleInputChange = (e) => {
+        const { name, value, type, checked } = e.target;
+        setState(prev => {
+            return { ...prev, [name]: type === 'checkbox' ? checked : value };
+        });
+    };
+
+    const handleModelTypeChange = (e) => {
+        const { value } = e.target;
+        setState(prev => ({
+            ...prev,
+            modelType: value,
+            samplingStrategy: value === 'regression' ? 'dontOversample' : prev.samplingStrategy
+        }));
+    };
+
+    function updateData(jsonData) {
+        setState(prev => ({
+            ...prev,
+            columns: jsonData[0],
+            data: jsonData,
+            // fileSize: jsonData.length,
+            isLoading: false,
+        }));
+    }
+
+    const handleRemoveFile = (fileInputRef) => {
+        // Ensure that the function can be called with fileInputRef as a parameter
+        if (fileInputRef && fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+        setState(prev => ({ ...prev, fileName: '', fileSize: 0, data: [], columns: [], columnOptions: {}, targetColumn: '' }));
+    };
+
+    const handleOptionChange = (colIndex, event) => {
+        setState(prev => ({
+            ...prev,
+            columnOptions: {
+                ...prev.columnOptions,
+                [colIndex]: event.target.value,
+            },
+        }));
+    };
+
+    useEffect(() => {
+        const validateDataset = () => {
+            if (state.data.length <= 1) {
+                setState(prev => ({ ...prev, datasetError: 'Please upload a dataset file.' }));
+            } else {
+                setState(prev => ({ ...prev, datasetError: '' }));
+            }
+        };
+
+        const validateModelName = () => {
+            if (state.modelName.trim() === '') {
+                setState(prev => ({ ...prev, modelNameError: 'Please enter a model name.' }));
+            } else {
+                setState(prev => ({ ...prev, modelNameError: '' }));
+            }
+        };
+
+        const validateModelType = () => {
+            if (state.modelType.trim() === '') {
+                setState(prev => ({ ...prev, modelTypeError: 'Please select a model type.' }));
+            } else {
+                setState(prev => ({ ...prev, modelTypeError: '' }));
+            }
+        };
+
+        const validateTargetColumn = () => {
+            if (state.data.length > 1 && state.targetColumn.trim() === '') {
+                setState(prev => ({ ...prev, targetColumnError: 'Please select a target column.' }));
+            } else {
+                setState(prev => ({ ...prev, targetColumnError: '' }));
+            }
+        };
+
+        validateDataset();
+        validateModelName();
+        validateModelType();
+        validateTargetColumn();
+    }, [state.data, state.modelName, state.modelType, state.targetColumn]);
+
+    useEffect(() => {
+        // Handle column options reset on file name change
+        if (state.fileName === '') {
+            setState(prev => ({ ...prev, columns: [], columnOptions: {} }));
+        } else {
+            const initialOptions = state.columns.reduce((options, _, colIndex) => ({
+                ...options,
+                [colIndex]: 'raw',
+            }), {});
+            setState(prev => ({ ...prev, columnOptions: initialOptions }));
+        }
+    }, [state.columns, state.fileName]);
+
+    // Use effect to update the MetricSelect based on model type
+    useEffect(() => {
+        // Set the default metric based on the initial or updated model type
+        const defaultMetric = state.modelType === "regression" ? "r2" : state.modelType === "classification" ? "accuracy" : "";
+        setState(prev => ({ ...prev, metric: defaultMetric }));
+    }, [state.modelType]);
+
+
+    const handleChangeRowsPerPage = (event) => {
+        setState(prev => ({
+            ...prev,
+            rowsPerPage: parseInt(event.target.value, 10),
+            currentPage: INITIAL_PAGE,
+        }));
+    };
+
+    const handleChangePage = (event, newPage) => {
+        setState(prev => ({ ...prev, currentPage: newPage + 1 })); // plus 1 because MUI uses zero-based index for pages
+    };
+
+    const handleSubmit = async () => {
+        setState(prev => ({ ...prev, isSubmitting: true }));
+        try {
+            // Extract headers and rows from the data
+            const [headers, ...rows] = state.data; // Access data using state.data
+
+            // Filter columns based on the 'Use column data' option
+            const filteredColumnsIndexes = headers.map((_, index) => index).filter(index => state.columnOptions[index] === 'raw'); // Use state.columnOptions
+            const filteredHeaders = headers.filter((_, index) => filteredColumnsIndexes.includes(index));
+            const filteredRows = rows.map(row => row.filter((_, index) => filteredColumnsIndexes.includes(index)));
+
+            // Prepare the payload
+            const payload = {
+                fileName: state.fileName,
+                modelName: state.modelName.trim(),
+                description: state.description.trim(),
+                dataset: [filteredHeaders, ...filteredRows],
+                targetColumn: state.targetColumn,
+                modelType: state.modelType,
+                trainingStrategy: state.trainingStrategy,
+                samplingStrategy: state.samplingStrategy,
+                metric: state.metric,
+                isTimeSeries: state.isTimeSeries, 
+            };
+
+            // Send the data to the server
+            const response = await handleMakeRequest(navigate, '/api/trainModel/', 'POST', payload, {}, true); // Adjust the endpoint as necessary
+            console.log(response.data); // Handle the response as needed
+        } catch (error) {
+            console.error('Error submitting the data:', error);
+        }
+        setState(prev => ({ ...prev, isSubmitting: false }));
+    };
+
+
+    const renderColumnOptions = (colIndex) => {
+        return (
+            <FormControl fullWidth size="small" margin="dense">
+                <InputLabel id={`select-label-${colIndex}`}>Options</InputLabel>
+                <Select
+                    sx={{ width: 200 }} // Adjust the width as needed
+                    labelId={`select-label-${colIndex}`}
+                    id={`select-${colIndex}`}
+                    value={state.columnOptions[colIndex] || 'raw'}
+                    label="Options"
+                    onChange={(event) => handleOptionChange(colIndex, event)}
+                >
+                    <MenuItem value={'raw'}>Use column data</MenuItem>
+                    {/* TODU: Add encryption logic*/}
+                    {/* <MenuItem value={'data_encrypt'}>Encrypt column data</MenuItem>
+                    <MenuItem value={'column_name_encrypt'}>Encrypt column name</MenuItem>
+                    <MenuItem value={'data_and_column_name_encrypt'}>Encrypt column name and data</MenuItem> */}
+                    <MenuItem value={'ignore'}>Don't use column data</MenuItem>
+                </Select>
+            </FormControl>
+        );
+    };
+
+    // Add custom styling here
+    const containerStyles = {
+        marginTop: '1px', // Adjust the top margin
+        marginRight: '16px', // Adjust the right margin
+    };
+
+    const gridItemStyles = {
+        padding: '8px', // Provides spacing inside each grid item
+    };
+
+    return (    
+        <Box sx={{ p: 1 }}> {/* Use Box to provide padding around the entire component */}
+            <Container maxWidth={false} sx={containerStyles}>
+                <TitleView titleText="Train Model" IconComponent={TrainModelIcon} />
+                <Grid container spacing={3}>
+                    <Grid item xs={2} sx={gridItemStyles}>
+                        <ModelNameInput
+                            value={state.modelName}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>
+                    <Grid item xs={4} sx={gridItemStyles}>
+                        <DescriptionInput
+                            label="Description"
+                            value={state.description}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <UploadFile
+                            state={state}
+                            updateData={updateData}
+                            handleRemoveFile={handleRemoveFile}
+                            setState={setState}
+                            loading={state.isLoading}
+                        />
+                    </Grid>
+                    <Grid item xs={12}>
+                        <DatasetContent
+                            state={state}
+                            renderColumnOptions={renderColumnOptions}
+                            handleChangePage={handleChangePage}
+                            handleChangeRowsPerPage={handleChangeRowsPerPage}
+                        >
+                        </DatasetContent>
+                    </Grid>
+                    {state.data.length > 0 && <Grid item xs={2}>
+                        <TargetColumnSelect
+                            columns={state.columns}
+                            value={state.targetColumn}
+                            onChange={handleInputChange}
+                        />
+                    </Grid>}
+                    <Grid item xs={12}>
+                        <Grid container spacing={2} alignItems="center">
+                            <Grid item>
+                                <ModelTypeRadioGroup
+                                    value={state.modelType}
+                                    onChange={handleModelTypeChange}
+                                />
+                            </Grid>
+                            <Grid item>
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={state.isTimeSeries}
+                                            onChange={handleInputChange}
+                                            name="isTimeSeries"
+                                        />
+                                    }
+                                    label="Is Time Series"
+                                />
+                            </Grid>
+                            <Grid item xs={2}>
+                                <TrainingStrategySelect
+                                    trainingStrategies={trainingStrategyOptions}
+                                    value={state.trainingStrategy}
+                                    onChange={handleInputChange}
+                                />
+                            </Grid>
+                            {state.modelType === "classification" && <Grid item xs={2}>
+                                <SamplingStrategySelect
+                                    samplingStrategies={samplingStrategyOptions}
+                                    value={state.samplingStrategy}
+                                    onChange={handleInputChange}
+                                />
+                            </Grid>}
+                            {state.modelType && <Grid item xs={2}>
+                                <MetricSelect
+                                    metrics={state.modelType === "regression" ? metricsRegressionOptions : state.modelType === "classification" ? metricsclassificationOptions : {}}
+                                    value={state.metric}
+                                    onChange={handleInputChange}
+                                />
+                            </Grid>}
+
+                        </Grid>
+                    </Grid>
+                    <Box sx={{ p: 1 }}>
+                        <Container maxWidth={false} sx={{ ...containerStyles }}>
+                            {!isValidSubmission() && (
+                                <Alert severity="error" sx={{ mb: 1 }}>
+                                    <AlertTitle>Please fulfill these requirements!</AlertTitle>
+                                    {state.datasetError && <div>{state.datasetError}</div>}
+                                    {state.modelNameError && <div>{state.modelNameError}</div>}
+                                    {state.modelTypeError && <div>{state.modelTypeError}</div>}
+                                    {state.targetColumnError && <div>{state.targetColumnError}</div>}
+                                </Alert>
+                            )}
+                        </Container>
+                    </Box>
+                    <Grid item xs={12}>
+                        <LoadingButton
+                            variant="contained"
+                            color="primary"
+                            onClick={handleSubmit}
+                            loading={state.isSubmitting}
+                            disabled={!isValidSubmission()}
+                        >
+                            Submit
+                        </LoadingButton>
+                    </Grid>
+                </Grid>
+            </Container>
+        </Box>
+    );
+}
+
+export default TrainModel;
+
+src\ai\UserModels.jsx:
+import React, { useState, useEffect } from 'react';
+import {
+  Grid,
+  IconButton,
+  Dialog,
+  DialogActions,
+  DialogTitle,
+  Button,
+  TextField,
+} from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import DownloadIcon from '@mui/icons-material/Download';
+import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
+import { DataGrid } from '@mui/x-data-grid';
+import { useNavigate } from 'react-router-dom';
+import { handleMakeRequest } from '../app/RequestNavigator';
+import { ModelsGridIcon } from '../icons/ModelsGridIcon';
+
+import { TitleView } from './ModelFormComponents';
+import { trainingStrategyOptions, samplingStrategyOptions, metricsRegressionOptions, metricsclassificationOptions } from './consts';
+
+const UserModels = () => {
+  const [tableData, setTableData] = useState([]);
+  const [filteredData, setFilteredData] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [pageSize] = useState(5);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [currentModel, setCurrentModel] = useState({});
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await handleMakeRequest(navigate, '/api/userModels/', 'GET', null, {}, true);
+        const modelsArray = response.data.models.map(model => ({
+          ...model,
+          training_strategy: trainingStrategyOptions[model.training_strategy],
+          metric: {...metricsRegressionOptions, ...metricsclassificationOptions}[model.metric],
+          sampling_strategy: samplingStrategyOptions[model.sampling_strategy],
+          created_at: new Date(model.created_at),
+        }));
+        setTableData(modelsArray);
+        setFilteredData(modelsArray);
+      } catch (error) {
+        console.error('Failed to fetch AI models: ', error);
+      }
+    };
+
+    fetchData();
+  }, [navigate]);
+
+  useEffect(() => {
+    if (filter) {
+      const lowercasedFilter = filter.toLowerCase();
+      const filteredData = tableData.filter(item =>
+        Object.keys(item).some(key =>
+          String(item[key]).toLowerCase().includes(lowercasedFilter)
+        )
+      );
+      setFilteredData(filteredData);
+    } else {
+      setFilteredData(tableData);
+    }
+  }, [filter, tableData]);
+
+  const handleDelete = async (id) => {
+    setTableData(tableData.filter((item) => item.id !== id));
+    setDeleteDialogOpen(false);
+    await handleMakeRequest(navigate, `/api/model?model_name=${id}`, 'DELETE', null, {}, true);
+  };
+
+  const handleEditDescription = (id, newDescription) => {
+    const updatedData = tableData.map((item) => {
+      if (item.id === id) {
+        return { ...item, description: newDescription };
+      }
+      return item;
+    });
+    setTableData(updatedData);
+    setEditDialogOpen(false);
+  };
+
+  const openDeleteDialog = (model) => {
+    setCurrentModel(model);
+    setDeleteDialogOpen(true);
+  };
+
+  const openEditDialog = (model) => {
+    setCurrentModel(model);
+    setEditDialogOpen(true);
+  };
+
+  const columns = [
+    { field: 'id', headerName: 'Name', width: 270, headerAlign: 'center' },
+    { field: 'description', headerName: 'Description', width: 110, headerAlign: 'center' },
+    { field: 'created_at', headerName: 'Created At', width: 200, headerAlign: 'center' },
+    { field: 'file_name', headerName: 'Train File Name', width: 180, headerAlign: 'center' },
+    { field: 'file_line_num', headerName: 'Dataset Lines', width: 110, headerAlign: 'center' },
+    { field: 'model_type', headerName: 'Model Type', width: 110, headerAlign: 'center' },
+    { field: 'training_strategy', headerName: 'Training Strategy', width: 170, headerAlign: 'center' },
+    { field: 'sampling_strategy', headerName: 'Sampling Strategy', width: 180, headerAlign: 'center' },
+    { field: 'metric', headerName: 'Metric', width: 80, headerAlign: 'center' },
+    { field: 'train_score', headerName: 'Train Score', width: 100, headerAlign: 'center' },
+    { field: 'test_score', headerName: 'Test Score', width: 100, headerAlign: 'center' },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 200,
+      sortable: false,
+      headerAlign: 'center',
+      renderCell: (params) => (
+        <>
+          <IconButton onClick={() => openEditDialog(params.row)}>
+            <EditIcon />
+          </IconButton>
+          <IconButton onClick={() => openDeleteDialog(params.row)}>
+            <DeleteIcon />
+          </IconButton>
+          <IconButton
+            onClick={async () => {
+              await handleMakeRequest(navigate, `/api/modelMetric?model_name=${params.row.id}`, 'GET', null, {}, true);
+            }}
+          >
+            <DownloadIcon />
+          </IconButton>
+          <IconButton onClick={() => navigate(`/inference?model=${params.row.id}`)}>
+            <PlayCircleOutlineIcon />
+          </IconButton>
+        </>
+      ),
+      headerClassName: 'action-column-header',
+      cellClassName: 'action-column-cell',
+    },
+  ];
+
+  return (
+    <Grid container justifyContent="center" sx={{ mt: 3 }}>
+      <Grid item xs={12} sx={{ mb: 3, display: 'flex', alignItems: 'center', pl: 4, pr: 4, justifyContent: 'space-between' }}>
+        <TitleView titleText="User Models" IconComponent={ModelsGridIcon} />
+        <TextField
+          variant="outlined"
+          placeholder="Filter models"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          size="small"
+          sx={{ width: '300px' }}
+        />
+      </Grid>
+      <Grid item xs={12} sx={{ width: '100%', pl: 4, pr: 4 }}>
+        <div style={{ height: 600, width: '100%' }}>
+          <DataGrid
+            initialState={{
+              pagination: { pageSize: pageSize },
+            }}
+            pageSizeOptions={[5, 10, 25]}
+            rows={filteredData}
+            columns={columns}
+            sx={{
+              '& .action-column-header': {
+                borderLeft: '2px solid rgba(224, 224, 224, 1)',
+              },
+              '& .action-column-cell': {
+                borderLeft: '2px solid rgba(224, 224, 224, 1)',
+              },
+              '& .MuiDataGrid-columnHeaderTitle': {
+                fontWeight: 'bold',
+                textAlign: 'center',
+              },
+              '& .MuiDataGrid-footerContainer': {
+                display: 'none',
+              },
+              '& .MuiDataGrid-cell': {
+                textAlign: 'center',
+                borderRight: '1px solid rgba(224, 224, 224, 1)', // Add vertical lines between cells
+              },
+              '& .MuiDataGrid-columnHeader': {
+                borderRight: '1px solid rgba(224, 224, 224, 1)', // Add vertical lines between column headers
+              },
+              '& .MuiDataGrid-columnHeader:last-child': {
+                borderRight: 'none', // Remove the right border from the last column header
+              },
+              '& .MuiDataGrid-columnHeaders': {
+                borderBottom: '1px solid rgba(224, 224, 224, 1)',
+              },
+            }}
+          />
+        </div>
+      </Grid>
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)}>
+        <DialogTitle>Edit Description</DialogTitle>
+        <TextField
+          autoFocus
+          margin="dense"
+          id="name"
+          label="Description"
+          type="text"
+          fullWidth
+          variant="standard"
+          value={currentModel.description || ''}
+          onChange={(e) => setCurrentModel({ ...currentModel, description: e.target.value })}
+        />
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => handleEditDescription(currentModel.id, currentModel.description)}>Save</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+        <DialogTitle>Are you sure you want to delete this model?</DialogTitle>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => handleDelete(currentModel.id)} color="error">
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Grid>
+  );
+};
+
+export default UserModels;
+
+
+src\app\api.jsx:
+import axios from 'axios';
+import appConfig from '../config/config.json';
+
+/**
+ * Make an HTTP request using axios with optional token authentication and credentials.
+ * 
+ * @param {string} url The URL for the request.
+ * @param {'GET'|'POST'|'PUT'|'DELETE'} method The HTTP method to use.
+ * @param {Object} [body] The request body, for methods that use it (like POST or PUT).
+ * @param {Object} [headers] Optional headers to include in the request.
+ * @param {boolean} [useToken=true] Whether to include an Authorization token.
+ * @returns {Promise} Axios response.
+ */
+const makeRequest = async (url, method, body = null, headers = {}, useToken = true) => {
+  try {
+    // Add Authorization token to headers if useToken is true
+    if (useToken) {
+      const token = localStorage.getItem('access_token');
+    headers['Authorization'] = `Bearer ${token}`;
+    }
+    url = `${appConfig.SERVER_ADDRESS}:${appConfig.SERVER_PORT}` + url;
+    // Configurations for the axios request
+    const config = {
+      method,
+      url,
+      headers,
+      ...(body && { data: body }), // Conditionally add body if it exists
+    };
+
+    // Make the request
+    return await axios(config);
+
+  } catch (error) {
+    // Handle error
+    console.error("HTTP Request Error:", error);
+    throw error; // Rethrow if you want the calling function to handle it
+  }
+};
+
+export default makeRequest;
+
+
+
+src\app\App.jsx:
+import React from 'react';
+import { BrowserRouter as Router } from 'react-router-dom';
+import { AuthProvider } from '../authentication/AuthContext';
+import Routers from '../app/Routers';
+import Header from './Header';
+import Sidebar from './Sidebar';
+import { WebSocketProvider } from './WebSocketContext';
+import Notifications from './Notifications';
+import './App.css'; 
+
+function App() {
+  return (
+    <WebSocketProvider>
+      <AuthProvider>
+        <Router>
+          <Header />
+          <Sidebar />
+          <div className="main-content">
+            <Notifications />
+            <Routers /> 
+          </div>
+        </Router>
+      </AuthProvider>
+    </WebSocketProvider>
+  );
+}
+
+export default App;
+
+
+src\app\Header.jsx:
+import React from 'react';
+import { Link } from 'react-router-dom';
+import './Header.css';
+import { TrainModelIcon } from '../icons/TrainModelIcon';
+import { ModelsGridIcon } from '../icons/ModelsGridIcon';
+import { MenuIcon } from '../icons/MenuIcon';
+
+function Header() {
+  return (
+    <div className="header">
+      <div className="menu-icon">
+        {/* <MenuIcon /> */}
+        <img src="logo12.png" alt="Tabularwizard Logo" class="logo"/>
+      </div>
+      <div className="title">Tabular Wizard</div>
+      <div className="controls">
+        <Link to="/trainModel" className="button">
+          <TrainModelIcon />
+          <span>Train Model</span>
+        </Link>
+        <Link to="/userModels" className="button">
+          <ModelsGridIcon />
+          <span>User Models</span>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+export default Header;
+
+
+src\app\MainPage.jsx:
+import React, { useEffect, useState } from "react";
+import { handleMakeRequest } from '../app/RequestNavigator';
+import { useNavigate } from 'react-router-dom';
+
+function MainPage() {
+  const [content, setContent] = useState("");
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem("access_token");
+
+    const fetchContent = async () => {
+      if (token) {
+        try {
+          const response = await handleMakeRequest(navigate,'/', 'GET', null, {}, true)
+          setContent(response.data);
+        } catch (error) {
+          // If the token is invalid, navigate to login
+          console.error("Error fetching main content:", error);
+          navigate("/login");
+        }
+      } else {
+        // If there is no token, navigate to login
+        navigate("/login");
+      }
+    };
+
+    fetchContent();
+  }, [navigate]);
+
+  return (
+    <div>
+      <h1>Main Page</h1>
+      <p>{content}</p>
+    </div>
+  );
+}
+
+export default MainPage;
+
+
+src\app\MessageModal.jsx:
+import React from 'react';
+
+const MessageModal = ({ message, onClose }) => {
+  if (!message) return null;
+
+  //   return (
+  //     <div className="message-modal-backdrop">
+  //       <div className="message-modal">
+  //         <h4>Server Message</h4>
+  //         <p>{message}</p>
+  //         <button onClick={onClose}>Close</button>
+  //       </div>
+  //     </div>
+  //   );
+  // };
+  return (
+    <div className="message-modal-backdrop" onClick={onClose}>
+      <div className="message-modal" onClick={e => e.stopPropagation()}>
+        <h4>Server Message</h4>
+        <p>{message}</p>
+        <button onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+};
+
+export default MessageModal;
+
+
+src\app\Notifications.jsx:
+import React, { useState, useEffect } from 'react';
+import { useWebSocket } from './WebSocketContext'; // Adjust the import path as needed
+import Alert from '@mui/material/Alert';
+import Stack from '@mui/material/Stack';
+import Button from '@mui/material/Button';
+import Collapse from '@mui/material/Collapse';
+
+const Notifications = () => {
+    const { messages } = useWebSocket();
+    const [currentMessage, setCurrentMessage] = useState('');
+    const [open, setOpen] = React.useState(true);
+
+    // When a new message is received, show the modal
+    useEffect(() => {
+        if (messages.length > 0) {
+            const latestMessage = messages[messages.length - 1];
+            setCurrentMessage(latestMessage.message);
+            setOpen(true);
+        } else {
+            setOpen(false);
+        }
+    }, [messages]);
+
+    return (
+        <Collapse in={open}>
+        <Stack sx={{ width: '100%' }} spacing={2}>
+            <Alert
+                variant="filled"
+                sx={{ bgcolor: '#1976D2' }}
+                severity="success"
+                action={
+                    <Button 
+                    color="inherit"
+                     size="small"
+                     onClick={() => {
+                        setCurrentMessage('');
+                        setOpen(false);
+                      }}>
+                        Close
+                    </Button>
+                }>
+                {currentMessage}
+            </Alert>
+
+        </Stack>
+        </Collapse>
+    );
+};
+
+export default Notifications;
+
+
+src\app\RequestNavigator.jsx:
+// src/app/RequestNavigator.js
+import makeRequest from './api';
+
+const handleMakeRequest = async (navigate, ...args) => {
+  try {
+    return await makeRequest(...args);
+  } catch (error) {
+    if (error.response && (error.response.status === 401 || error.response.status === 422)) {
+      navigate('/login', { replace: true });
+    } else {
+      throw error;
+    }
+  }
+};
+
+export { handleMakeRequest };
+
+src\app\Routers.jsx:
+import {
+  Route,
+  Routes,
+  Navigate,
+} from "react-router-dom";
+import React from 'react';
+import Login from "../authentication/Login";
+import TrainModel from "../ai/TrainModel"
+import UserModels from "../ai/UserModels"
+import Inference from "../ai/Inference"
+import PrivateRoute from '../authentication/PrivateRoute';
+
+function Routers() {
+  return (
+    <Routes>
+      <Route path="login" element={<Login />} />
+      <Route exact element={<PrivateRoute />}>
+          <Route exact path="/" element={<TrainModel />} />
+          <Route path="/trainModel" element={<TrainModel />} />
+          <Route path="/userModels" element={<UserModels />} />
+          <Route path="/inference" element={<Inference />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+      
+    </Routes>
+  );
+}
+
+export default Routers;
+
+
+src\app\Sidebar.jsx:
+import React, { useContext } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faUser, faCog, faComments, faInfoCircle, faSignOutAlt } from '@fortawesome/free-solid-svg-icons';
+import useLogout from '../authentication/useLogout';
+import { AuthContext } from '../authentication/AuthContext';
+
+import './Sidebar.css'; // Import the CSS for styling
+import logoutIcon from '../icons/logout.svg'; // Import the logout icon, ensure to add this file
+
+const Sidebar = () => {
+    const { isAuthenticated } = useContext(AuthContext);
+    const logout = useLogout();
+
+    return (
+        <div className="sidebar">
+            <div className="logo-container">
+                <img src="image.png" alt="WebAppUI Logo" className="logo" />
+                <span className="menu-title">Menu</span>
+            </div>
+            <div className="search-container">
+                <input type="text" placeholder="Search" />
+            </div>
+            <div className="menu-options">
+                <div className="menu-item">
+                    <FontAwesomeIcon icon={faUser} className="icon" />
+                    <span className="menu-text">Users Management</span>
+                </div>
+                <div className="menu-item">
+                    <FontAwesomeIcon icon={faCog} className="icon" />
+                    <span className="menu-text">Settings</span>
+                </div>
+            </div>
+            <div className="bottom-section">
+                <div className="menu-item">
+                    <FontAwesomeIcon icon={faComments} className="icon" />
+                    <span className="menu-text">Support</span>
+                </div>
+                <div className="menu-item">
+                    <FontAwesomeIcon icon={faInfoCircle} className="icon" />
+                    <span className="menu-text">About Me</span>
+                </div>
+                {isAuthenticated && (
+                    <div className="user-info">
+                        <span className="username">Connected</span>
+                        <button onClick={logout} className="logout-button" style={{ border: 'none', background: 'none' }}>
+                            <img src={logoutIcon} alt="Logout" className="logout-icon" />
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+export default Sidebar;
+
+
+src\app\WebSocketContext.jsx:
+// src/app/WebSocketContext.jsx
+
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import io from "socket.io-client";
+import appConfig from "../config/config.json";
+
+const WebSocketContext = createContext();
+
+export const useWebSocket = () => useContext(WebSocketContext);
+
+export const WebSocketProvider = ({ children }) => {
+  const [messages, setMessages] = useState([]);
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    socketRef.current = io(
+      `${appConfig.SERVER_ADDRESS}:${appConfig.SERVER_PORT}`,
+      {
+        transports: ["websocket"],
+        path: "/socket.io",
+        autoConnect: true,
+      }
+    );
+
+    const socket = socketRef.current;
+
+    socket.on("connect", () => {
+      console.log("Connected to Socket.IO server");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Connection error:", err);
+    });
+
+    socket.on("status", (message) => {
+      setMessages((prevMessages) => [...prevMessages, message]);
+      if (message["status"] === "success" && message["file_url"]) {
+        console.log(`message["file_url"]:${message["file_url"]}`);
+        // If the message has a CSV URL, prompt the user to download the file
+        const downloadLink = document.createElement("a");
+        const token = localStorage.getItem("access_token");
+        downloadLink.href = `${message["file_url"]}?Authorization=${token}&model_name=${message["model_name"]}&file_type=${message["file_type"]}`;    
+        console.log(`message["file_url"]:${message["file_url"]}`);
+        console.log(`downloadLink.href:${downloadLink.href}`);
+        downloadLink.download = "download_file";
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+      }
+    });
+
+    return () => {
+      if (socket) {
+        socket.close();
+        console.log("Disconnected from Socket.IO server");
+      }
+    };
+  }, []);
+
+  return (
+    <WebSocketContext.Provider value={{ messages }}>
+      {children}
+    </WebSocketContext.Provider>
+  );
+};
+
+
+src\authentication\AuthContext.jsx:
+import React, { createContext, useState } from 'react';
+
+export const AuthContext = createContext();
+
+export const AuthProvider = ({ children }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    Boolean(localStorage.getItem('access_token'))
+  );
+  return (
+    <AuthContext.Provider value={{ isAuthenticated, setIsAuthenticated }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+
+src\authentication\Login.jsx:
+import React, { useState, useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AuthContext } from './AuthContext';
+import { TextField, Button, Container, Box, Typography, CssBaseline } from '@mui/material';
+import './Login.css';
+import { handleMakeRequest } from '../app/RequestNavigator';
+
+function Login() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const { setIsAuthenticated } = useContext(AuthContext);
+  const navigate = useNavigate(); 
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await handleMakeRequest(navigate,'/api/login/', 'POST', { email, password }, {}, false, false)
+      
+      if (response.status === 200) {
+        setIsAuthenticated(true);
+        localStorage.setItem('access_token', response.data.access_token);
+        navigate('/userModels'); 
+          
+      }
+    } catch (error) {
+      console.error("Login failed:", error);
+      setIsAuthenticated(false);
+    }
+  };
+
+  return (
+    <Container component="main" maxWidth="xs">
+      <CssBaseline />
+      <Box className="login-container">
+        <Typography component="h1" variant="h5">
+          Sign in
+        </Typography>
+        <Box component="form" onSubmit={handleSubmit} className="form">
+          <TextField
+            margin="normal"
+            required
+            fullWidth
+            id="email"
+            label="Email"
+            name="email"
+            autoComplete="email"
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <TextField
+            margin="normal"
+            required
+            fullWidth
+            name="password"
+            label="Password"
+            type="password"
+            id="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <Button
+            type="submit"
+            fullWidth
+            variant="contained"
+            className="submit-button"
+          >
+            Sign In
+          </Button>
+        </Box>
+      </Box>
+    </Container>
+  );
+}
+
+export default Login;
+
+
+src\authentication\PrivateRoute.jsx:
+import React, { useContext } from 'react';
+import { Navigate, Outlet } from 'react-router-dom';
+import { AuthContext } from './AuthContext';
+
+const PrivateRoute = () => {
+    const { isAuthenticated } = useContext(AuthContext);
+
+    return isAuthenticated ? <Outlet  /> : <Navigate to="/login" />
+};
+
+export default PrivateRoute;
+
+
+
+src\authentication\useLogout.jsx:
+import { useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AuthContext } from './AuthContext';
+
+const useLogout = () => {
+  const navigate = useNavigate();
+  const { setIsAuthenticated } = useContext(AuthContext);
+
+  const logout = () => {
+    localStorage.removeItem('access_token');
+    setIsAuthenticated(false);
+    navigate('/login');
+  };
+
+  return logout;
+};
+
+export default useLogout;
+
+
+src\icons\InferenceIcon.jsx:
+import React from 'react';
+
+export const InfrenceIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M8 18L1 22V6L8 2M8 18L16 22M8 18V2M16 22L23 18V2L16 6M16 22V6M16 6L8 2" stroke="#101828" stroke-width="2" strokeLinecap="round" stroke-linejoin="round" />
+    </svg>
+);
+
+src\icons\MenuIcon.jsx:
+import React from 'react';
+
+export const MenuIcon = () => (
+    <svg width="20" height="14" viewBox="0 0 20 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M19 5H1M19 1H1M19 9H1M19 13H1" stroke="#4C515E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+);
+
+
+src\icons\ModelsGridIcon.jsx:
+import React from 'react';
+
+export const ModelsGridIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="3" width="7" height="7" stroke="#282F3E" strokeWidth="2" />
+    <rect x="14" y="3" width="7" height="7" stroke="#282F3E" strokeWidth="2" />
+    <rect x="3" y="14" width="7" height="7" stroke="#282F3E" strokeWidth="2" />
+    <rect x="14" y="14" width="7" height="7" stroke="#282F3E" strokeWidth="2" />
+  </svg>
+);
+
+
+src\icons\TrainModelIcon.jsx:
+import React from 'react';
+
+export const TrainModelIcon = () => (
+    <svg width="22" height="18" viewBox="0 0 22 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1 11.5L11 16.5L21 11.5M11 1.5L1 6.5L11 11.5L21 6.5L11 1.5Z" stroke="#282F3E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+);
+
+
+src\icons\UserModelIcon.jsx:
+import React from 'react';
+
+export const UserModelIcon = () => (
+    <svg width="24" height="20" viewBox="0 0 24 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M17 19V17C17 15.9391 16.5786 14.9217 15.8284 14.1716C15.0783 13.4214 14.0609 13 13 13H5C3.93913 13 2.92172 13.4214 2.17157 14.1716C1.42143 14.9217 1 15.9391 1 17V19M23 19V17C22.9993 16.1137 22.7044 15.2528 22.1614 14.5523C21.6184 13.8519 20.8581 13.3516 20 13.13M16 1.13C16.8604 1.3503 17.623 1.8507 18.1676 2.55231C18.7122 3.25392 19.0078 4.11683 19.0078 5.005C19.0078 5.89317 18.7122 6.75608 18.1676 7.45769C17.623 8.1593 16.8604 8.6597 16 8.88M13 5C13 7.20914 11.2091 9 9 9C6.79086 9 5 7.20914 5 5C5 2.79086 6.79086 1 9 1C11.2091 1 13 2.79086 13 5Z" stroke="#282F3E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+);
+

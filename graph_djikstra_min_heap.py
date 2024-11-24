@@ -1,24 +1,6 @@
 from collections import defaultdict
 import heapq
 
-# def dijkstra(g, src, target):
-#     q = [(0, src, ())]
-#     visited, dist = set(), {src: 0.0}
-#     while q:
-#         cost, v, path = heapq.heappop(q)
-#         if v not in visited:
-#             visited.add(v)
-#             path += (v,)
-#             if v == target:
-#                 return (cost, path)
-            
-#             for cost2, v2 in g.get(v, ()):
-#                 if v2 in visited:
-#                     continue
-#                 if cost + cost2 < dist.get(v2, float('inf')):
-#                     dist[v2] = cost + cost2
-#                     heapq.heappush(q, (cost + cost2, v2, path)) 
-#     return (float('inf'), ())
 
 def dijkstra(g, src, target):
     q = [(0, src, [])]

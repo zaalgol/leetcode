@@ -1,0 +1,1530 @@
+run.py:
+import logging
+from app.app import create_app
+
+logger = logging.getLogger(__name__)
+
+app = create_app()
+
+if __name__ == '__main__':
+    logger.info("Starting Uvicorn server.")
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=8080, log_level="info")
+    
+
+
+app\app.py:
+import logging
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
+from app.config.config import Config
+from pymongo import MongoClient
+from app.socket import create_socketio
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def generate_mongo_client():
+    MONGODB_URI = Config.MONGODB_URI
+
+    if int(Config.IS_MONGO_LOCAL):
+        mongo_client = MongoClient(MONGODB_URI)
+    else:
+        mongo_client = MongoClient(
+            MONGODB_URI,
+            tls=True,
+            retryWrites=False,
+            tlsCAFile="global-bundle.pem",  # Adjust path accordingly
+            socketTimeoutMS=60000,
+            connectTimeoutMS=60000
+        )
+    db = mongo_client['tabular-wizard-db']
+    return db
+
+def create_app():
+    global app_instance
+    app = FastAPI()
+    app.state.config = Config
+
+    logger.info("Initializing MongoDB client.")
+    # Initialize MongoDB client and set it in app state
+    app.state.db = generate_mongo_client()
+
+    # Configure CORS middleware **before** attaching SocketManager
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],  # Or specify exact origins like ["http://localhost:5173"]
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    logger.info("Attaching SocketManager to the app.")
+    # Attach SocketManager to the app
+    app.state.socketio = create_socketio(app)
+
+    logger.info("Including main router.")
+    from app.routes.api import router as main_router
+    app.include_router(main_router)
+
+    app_instance = app  # Store the app instance globally
+    return app
+
+def get_app():
+    global app_instance
+    if app_instance is None:
+        raise RuntimeError("App has not been created yet")
+    return app_instance
+
+
+app\socket.py:
+# app/socket.py
+
+import logging
+from fastapi_socketio import SocketManager
+
+logger = logging.getLogger(__name__)
+
+# def create_socketio(app):
+#     logger.info("Creating SocketManager.")
+#     return SocketManager(
+#         app,
+#         cors_allowed_origins=None,  # Allows all origins
+#         transports=['websocket'],
+#         logger=True,                # Enable logging
+#         engineio_logger=True        # Enable engine.io logging
+#     )
+
+
+def create_socketio(app):
+    return SocketManager(
+        app,
+        cors_allowed_origins=["http://localhost:5173"],
+        async_mode='asgi',
+        mount_location='/socket.io',
+        transports=['websocket']
+        # logger=True,
+        # engineio_logger=True
+    )
+
+
+app\__init__.py:
+# from flask import Flask
+# app = Flask(__name__)
+# from app.app import views
+
+
+app\config\config.py:
+import os
+from dotenv import load_dotenv
+
+# Load the .env file
+dotenv_path = '/tabular-wizard-server/.env'  # Adjust the path as needed
+load_dotenv(dotenv_path)
+
+class Config:
+    SECRET_KEY = os.getenv('SECRET_KEY')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+    # SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL') # use for multi Docker container deployment
+    # SQLALCHEMY_DATABASE_URI = 'sqlite:///mydatabase.db'  # Use SQLite for local development
+    MONGODB_URI = os.getenv('MONGODB_URI')
+    IS_MONGO_LOCAL = os.getenv('IS_MONGO_LOCAL', 1)
+    IS_STORAGE_LOCAL = os.getenv('IS_STORAGE_LOCAL', 1)
+    ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+    QUEST_PASSWORD = os.getenv('QUEST_PASSWORD')
+    EMAIL_DOMAIN = os.getenv('EMAIL_DOMAIN')
+    JWT_HEADER_NAME = JWT_QUERY_STRING_NAME = 'Authorization'
+    JWT_ACCESS_TOKEN_EXPIRES = os.getenv('JWT_ACCESS_TOKEN_EXPIRES')
+    SAVED_MODELS_FOLDER = os.getenv('SAVED_MODELS_FOLDER')
+    SAVED_INFERENCES_FOLDER = os.getenv('SAVED_INFERENCES_FOLDER')
+    SERVER_NAME = os.getenv('SERVER_NAME')
+    
+    AWS_ACCESS_KEY = os.getenv('AWS_ACCESS_KEY')
+    AWS_SECRET_KEY = os.getenv('AWS_SECRET_KEY')
+    BUCKET_NAME = os.getenv('BUCKET_NAME')
+    
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    MODEL=os.getenv('MODEL')
+    MAX_TOKENS=os.getenv('MAX_TOKENS')
+    LLM_MAX_TRIES=os.getenv('LLM_MAX_TRIES')
+    LLM_NUMBER_OF_DATASET_LINES=os.getenv('LLM_NUMBER_OF_DATASET_LINES')
+    
+
+
+app\entities\model.py:
+from dataclasses import dataclass, field
+from datetime import datetime
+
+@dataclass
+class Model:
+    id: str = field(default=None)
+    user_id: str = field(default=None)
+    model_name: str = field(default=None)
+    file_name: str = field(default=None)
+    file_line_num: int = field(default=0)
+    description: str = field(default=None)
+    model_type: str = field(default=None)
+    is_multi_class: bool = field(default=False)
+    # ensemble: str = field(default='multi')
+    # training_speed: str = field(default=None)
+    training_strategy: str = field(default=None)
+    sampling_strategy: str = field(default=None)
+    target_column: str = field(default=None)
+    created_at: datetime = field(default=None)
+    columns: list[str] = field(default=None)
+    encoding_rules: dict[str, list[str]] = field(default_factory=dict)
+    transformations: dict[str, dict] = field(default_factory=dict)
+    metric: str = field(default=None)
+    formated_evaluations: str = field(default=None)
+    is_llm: bool = field(default=False)
+    model_description_pdf_file_path: str = field(default=None)
+    is_time_series: bool = field(default=False)
+    time_series_code: str = field(default=None)
+	
+
+app\repositories\model_repository.py:
+from bson import ObjectId
+from fastapi import Depends
+from datetime import datetime, timezone
+from pymongo.database import Database
+
+class ModelRepository:
+    def __init__(self, db: Database):
+        self._db = db
+
+    @property
+    def db(self):
+        return self._db
+    
+    @property
+    def users_collection(self):
+        return self.db['users']
+    
+    def add_or_update_model_for_user(self, model, columns, saved_model_file_path):
+        model_name = model.model_name
+        file_name_path = f"models.{model_name}.file_name"
+        file_line_num_path = f"models.{model_name}.file_line_num"
+        model_field_path = f"models.{model_name}.filePath"
+        created_at_field_path = f"models.{model_name}.created_at"
+        description_field_path = f"models.{model_name}.description"
+        columns_field_path = f"models.{model_name}.columns"
+        target_column_field_path = f"models.{model_name}.target_column"
+        model_type_field_path = f"models.{model_name}.model_type"
+        training_strategy_field_path = f"models.{model_name}.training_strategy"
+        sampling_strategy_field_path = f"models.{model_name}.sampling_strategy"
+        formated_evaluations_field_path = f"models.{model_name}.formated_evaluations"
+        metric_field_path = f"models.{model_name}.metric"
+        encoding_rules_field_path = f"models.{model_name}.encoding_rules"
+        transformations_field_path = f"models.{model_name}.transformations"
+        isDeleted_field_path = f"models.{model_name}.isDeleted"
+        is_multi_class_field_path = f"models.{model_name}.is_multi_class"
+        train_score_column_field_path = f"models.{model_name}.train_score"
+        test_score_column_field_path = f"models.{model_name}.test_score"
+        model_description_pdf_file_path_path = f"models.{model_name}.model_description_pdf_file_path"
+        is_time_series_field_path = f"models.{model_name}.is_time_series"
+        time_series_code_field_path = f"models.{model_name}.time_series_code"
+        
+        # Get the current UTC datetime
+        current_utc_datetime = datetime.now(timezone.utc)
+        
+        # Update the user document with the model path and current UTC datetime
+        return self.users_collection.update_one(
+            {"_id": ObjectId(model.user_id)},
+            {
+                "$set": {
+                    file_name_path: model.file_name,
+                    file_line_num_path: model.file_line_num,
+                    model_field_path: saved_model_file_path,
+                    description_field_path: model.description,
+                    created_at_field_path: current_utc_datetime,
+                    columns_field_path: columns,
+                    encoding_rules_field_path: model.encoding_rules,
+                    target_column_field_path: model.target_column,
+                    model_type_field_path: model.model_type,
+                    training_strategy_field_path: model.training_strategy,
+                    sampling_strategy_field_path: model.sampling_strategy,
+                    metric_field_path: model.metric,
+                    formated_evaluations_field_path: model.formated_evaluations,
+                    transformations_field_path: model.transformations,
+                    isDeleted_field_path: False,
+                    is_multi_class_field_path: model.is_multi_class,
+                    train_score_column_field_path: model.train_score,
+                    test_score_column_field_path: model.test_score,
+                    model_description_pdf_file_path_path: model.model_description_pdf_file_path,
+                    is_time_series_field_path: model.is_time_series,
+                    time_series_code_field_path: model.time_series_code
+                }
+            }
+        )
+    
+    def get_user_model_by_user_id_and_model_name(self, user_id, model_name, additional_properties):
+        pipeline = [
+            {"$match": {"_id": ObjectId(user_id), "isDeleted": {"$ne": True}}},
+            {"$project": {
+            model_name: f"$models.{model_name}",
+            "_id": 0  # Exclude the _id from the results if not needed
+        }},
+            {"$match": {"specific_model.isDeleted": {"$ne": True}}}  # Ensure the model is not marked as deleted
+        ]
+
+        result = self.users_collection.aggregate(pipeline).next()
+        if result:
+            return self._model_dict_to_front_list(result, additional_properties)[0]
+        else:
+            return {}
+
+    
+    def get_user_models_by_id(self, user_id, additional_properties):
+        pipeline = [
+            {"$match": {"_id": ObjectId(user_id), "isDeleted": {"$ne": True}}},
+            {"$project": {"models": {"$objectToArray": "$models"}}},
+            {"$addFields": {"models": {"$filter": {
+                "input": "$models",
+                "cond": {"$not": "$$this.v.isDeleted"}
+            }}}},
+            {"$project": {"models": {"$arrayToObject": "$models"}}}
+        ]
+        result = self.users_collection.aggregate(pipeline).next()
+        if result and result["models"]:
+            return self._model_dict_to_front_list(result.get("models", {}), additional_properties)
+        else:
+            return {}
+        
+    def delete_model_of_user(self, user_id, model_name, hard_delete=False):
+        """
+        Delete a model for a user. 
+        If hard_delete is True, delete the model physically from the database.
+        Otherwise, set its 'isDeleted' field to True.
+        """
+        model_field_path = f"models.{model_name}"
+        if hard_delete:
+            return self.users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$unset": {model_field_path: ""}}
+            )
+        else:
+            return self.users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {f"{model_field_path}.isDeleted": True}}
+            )
+        
+
+    def _model_dict_to_front_list(self, models_dict, additional_properties):
+        models_list = []
+        for name, details in models_dict.items():
+            # Initialize model_info with the id
+            model_info = {'id': name}
+            # Dynamically add properties from additional_properties if they exist in details
+            for property in additional_properties:
+                if property in details:
+                    model_info[property] = details[property]
+            models_list.append(model_info)
+        return models_list
+
+
+app\repositories\user_repository.py:
+from bson import ObjectId
+from datetime import datetime, timezone
+from pymongo.database import Database
+
+class UserRepository:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    @property
+    def db(self):
+        return self._db
+
+    @property
+    def users_collection(self):
+        return self.db['users']
+    
+    def get_user_by_id(self, user_id):
+        return self.users_collection.find_one({"_id": ObjectId(user_id), "isDeleted": {"$ne": True}})
+
+    def get_user_by_username(self, username):
+        return self.users_collection.find_one({"username": username, "isDeleted": {"$ne": True}})
+
+    def get_user_by_email(self, email):
+        return self.users_collection.find_one({"email": email, "isDeleted": {"$ne": True}})
+    
+    def get_user_by_email_and_password(self, email, password):
+        return self.users_collection.find_one({"email": email, "password": password, "isDeleted": {"$ne": True}})
+
+    def create_user(self, email, password):
+        try:
+            user_exists = self.users_collection.find_one({"email": email})
+            if user_exists:
+                return f"user with email {email} already exist"
+            user = {
+                "email": email,
+                "password": password,  # Ensure password is hashed appropriately
+            }
+            result = self.users_collection.insert_one(user)
+            return {"_id": result.inserted_id, **user}
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+
+
+app\routes\api.py:
+import json
+from datetime import datetime, timedelta
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi import WebSocket
+from app.entities.model import Model
+from app.services.model_service import ModelService
+from app.services.token_service import TokenService
+from app.services.user_service import UserService
+from pymongo.database import Database
+
+
+router = APIRouter()
+
+def get_db(request: Request) -> Database:
+    return request.app.state.db
+
+def get_user_service(db: Database = Depends(get_db)) -> UserService:
+    return UserService(db)
+
+def get_token_service() -> TokenService:
+    return TokenService()
+
+def get_model_service(db: Database = Depends(get_db)) -> ModelService:
+    return ModelService(db)
+
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+@router.post('/api/login/', status_code=status.HTTP_200_OK)
+async def login(request: Request, user_service: UserService = Depends(get_user_service)):
+    data = await request.json()
+    email = data.get('email')
+    password = data.get('password')
+    return user_service.login(email, password)
+
+@router.post('/api/trainModel/', status_code=status.HTTP_200_OK)
+async def train_model(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service),
+):
+    data = await request.json()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
+    model = Model(
+        user_id=user_id,
+        file_name=data.get('fileName'),
+        model_name=data.get('modelName'),
+        description=data.get('description'),
+        model_type=data.get('modelType'),
+        training_strategy=data.get('trainingStrategy'),
+        sampling_strategy=data.get('samplingStrategy'),
+        target_column=data.get('targetColumn'),
+        metric=data.get('metric'),
+        is_time_series=data.get('isTimeSeries', False)
+    )
+
+    return model_service.train_model(model, data.get('dataset'), background_tasks)
+
+@router.get('/api/userModels/', status_code=status.HTTP_200_OK)
+async def get_user_models(
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    user_service: UserService = Depends(get_user_service)
+):
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    models = model_service.get_user_models_by_id(user_id)
+
+    json_compatible_models = json.loads(json.dumps({"models": models}, cls=DateTimeEncoder))
+    return JSONResponse(content=json_compatible_models)
+
+@router.get('/api/model', status_code=status.HTTP_200_OK)
+async def get_user_model(
+    model_name: str, 
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service)
+):
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    model = model_service.get_user_model_by_user_id_and_model_name(user_id, model_name)
+    
+    json_compatible_models = json.loads(json.dumps({"model": model}, cls=DateTimeEncoder))
+    return JSONResponse(content=json_compatible_models)
+
+@router.get('/api/modelMetric', status_code=status.HTTP_200_OK)
+async def get_model_evaluations(
+    model_name: str, 
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service)
+):
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    model_service.get_model_details_file(user_id, model_name)
+    return JSONResponse(content={}, status_code=status.HTTP_200_OK)
+
+@router.delete('/api/model', status_code=status.HTTP_200_OK)
+async def delete_model(
+    model_name: str, 
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service)
+):
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    result = model_service.delete_model_of_user(user_id, model_name)
+    return JSONResponse(content={}, status_code=status.HTTP_200_OK)
+
+@router.post('/api/inference/', status_code=status.HTTP_200_OK)
+async def inference(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service),
+):
+    data = await request.json()
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
+    dataset = data.get('dataset')
+    model_name = data.get('modelName')
+    file_name = data.get('fileName')
+
+    model_service.inference(user_id=user_id, model_name=model_name, file_name=file_name, dataset=dataset, background_tasks=background_tasks)
+
+    return JSONResponse(content={}, status_code=status.HTTP_200_OK)
+
+@router.get('/download/{filename}')
+async def download_file(
+    filename: str, 
+    model_name: str, 
+    file_type: str, 
+    user_id: str = Depends(TokenService.extract_user_id_from_token),
+    model_service: ModelService = Depends(get_model_service),
+    token_service: TokenService = Depends(get_token_service),
+    user_service: UserService = Depends(get_user_service)
+):
+    user = user_service.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
+    file_path = model_service.download_file(user_id, model_name, filename, file_type)
+    
+    return FileResponse(file_path, filename=filename)
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        data = await websocket.receive_text()
+        await websocket.send_text(f"Message text was: {data}")
+
+
+app\routes\__init__.py:
+
+
+app\services\hashing_service.py:
+import bcrypt
+
+class PasswordHasher:
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """
+        Hash a password for storing.
+        """
+        # Convert the password to bytes and hash it
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        return hashed.decode('utf-8')
+    
+    @staticmethod
+    def check_password(hashed_password: str, user_password: str) -> bool:
+        """
+        Check a hashed password. Return True if the password matches, False otherwise.
+        """
+        # Convert the hashed password and user password to bytes, then check them
+        return bcrypt.checkpw(user_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+
+app\services\init_service.py:
+from app.services.user_service import UserService
+from app.config.config import Config 
+
+class InitService:
+    def __init__(self, app):
+        self.user_service = UserService()
+        self.seed_admin_user(app)
+        self.seed_quest_user(app)
+
+    def seed_admin_user(self, app):
+        with app.app_context():
+            email = Config.EMAIL_DOMAIN
+            password=Config.ADMIN_PASSWORD
+            return self.user_service.create_user(email, password)
+    
+    def seed_quest_user(self, app):
+        with app.app_context():
+            email = Config.EMAIL_DOMAIN
+            password= Config.QUEST_PASSWORD
+            return self.user_service.create_user(email, password)
+        
+
+
+
+app\services\model_service.py:
+import os
+from datetime import datetime, timezone
+from app.ai.data_preprocessing import DataPreprocessing
+from app.app import get_app
+from app.entities.model import Model
+from app.repositories.model_repository import ModelRepository
+from app.config.config import Config 
+from fastapi import Depends, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse, FileResponse
+from pymongo.database import Database
+from werkzeug.utils import safe_join
+import pandas as pd
+from app.storage.local_model_storage import LocalModelStorage
+from app.storage.model_storage import ModelStorage
+from app.tasks.inference_task import InferenceTask
+from app.tasks.training_task import TrainingTask
+from app.services.report_file_service import ReportFileService
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+import matplotlib.pyplot as plt
+from fastapi_socketio import SocketManager
+
+plt.switch_backend('Agg')
+
+class ModelService:
+    _instance = None
+
+    def __init__(self, db: Database):
+        self.config = Config
+        self.model_repository = ModelRepository(db)
+        self.data_preprocessing = DataPreprocessing()
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.reportFileTask = ReportFileService()
+        self.training_task = TrainingTask()
+        self.inference_task = InferenceTask()
+        self.socketio = get_app().state.socketio 
+
+        if int(Config.IS_STORAGE_LOCAL):
+            self.model_storage = LocalModelStorage()
+        else:
+            self.model_storage = ModelStorage()
+
+    def __new__(cls, db: Database):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def train_model(self, model: Model, dataset, background_tasks: BackgroundTasks):
+        if dataset is None:
+            raise HTTPException(status_code=400, detail="No dataset provided")
+        
+        model.file_line_num = len(dataset)
+        df = self.__dataset_to_df(dataset)
+
+        background_tasks.add_task(self.__run_training_task, model, df)
+
+        self.socketio.emit('status', {'status': 'success', 'message': f'Model {model.model_name} training in process.'})
+        return JSONResponse(content={}, status_code=200)
+
+    def __run_training_task(self, model, df):
+        self.training_task.run_task(model, df.columns.tolist(), df, self.__training_task_callback)
+
+    def __preprocess_data(self, df, drop_other_columns=None):
+        if drop_other_columns:
+            df = self.data_preprocessing.exclude_other_columns(df, columns=drop_other_columns)
+        return df
+    
+    def __dataset_to_df(self, dataset):
+        headers = dataset[0]
+        data_rows = dataset[1:]
+        df = pd.DataFrame(data_rows, columns=headers)
+        return df
+    
+    def inference(self, user_id, model_name, file_name, dataset, background_tasks: BackgroundTasks):
+        loaded_model = self.model_storage.load_model(user_id, model_name)
+        model_details_dict = self.get_user_model_by_user_id_and_model_name(user_id, model_name)
+        model_details = Model(**model_details_dict)
+        model_details.user_id = user_id
+        model_details.model_name = model_name
+        model_details.file_name = file_name
+
+        original_df = self.__dataset_to_df(dataset)
+        original_df = self.__preprocess_data(original_df, drop_other_columns=model_details.columns)
+
+        background_tasks.add_task(self.__run_inference_task, model_details, loaded_model, original_df)
+
+    def __run_inference_task(self, model_details, loaded_model, original_df):
+        self.inference_task.run_task(model_details, loaded_model, original_df, self.__inference_task_callback)
+
+    def __training_task_callback(self, df, model, trained_model, encoding_rules, transformations, headers, is_training_successfully_finished):
+        try:
+            if not is_training_successfully_finished:
+                self.socketio.emit('status', {'status': 'failed', 'message': f'Model {model.model_name} training failed.'})
+            else:
+                saved_model_file_path = self.model_storage.save_model(trained_model, model.user_id, model.model_name)
+                model.encoding_rules = encoding_rules
+                model.transformations = transformations
+
+                model.model_description_pdf_file_path = self.reportFileTask.generate_model_evaluations_file(model, df.copy())
+                
+                self.model_repository.add_or_update_model_for_user(model, headers, saved_model_file_path)
+                
+                self.socketio.emit('status', {
+                    'status': 'success',
+                    'file_type': 'evaluations',
+                    'model_name': f'{model.model_name}',
+                    'message': f'Model {model.model_name} training completed successfully.',
+                    'file_url': model.model_description_pdf_file_path
+                })
+        except Exception as e:
+            print(f"Error during training task callback: {e}")
+            self.socketio.emit('status', {'status': 'failed', 'message': f'Model {model.model_name} training failed.'})
+    
+    def __inference_task_callback(self, model_details, original_df, is_inference_successfully_finished):
+        if not is_inference_successfully_finished:
+            self.socketio.emit('status', {'status': 'failed', 'message': f'Model {model_details.model_name} inference failed.'})
+        else:
+            current_utc_datetime = datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')
+            saved_folder = Config.SAVED_INFERENCES_FOLDER
+            saved_inferences_folder = os.path.join(saved_folder, model_details.user_id, model_details.model_name)
+            upload_file_without_suffix = model_details.file_name[:model_details.file_name.index(".")]
+            csv_filename = f"{current_utc_datetime}__{model_details.model_name}__{upload_file_without_suffix}__inference.csv"
+            csv_filepath = os.path.join(saved_inferences_folder, csv_filename)
+            
+            if not os.path.exists(saved_inferences_folder):
+                os.makedirs(saved_inferences_folder)
+            original_df.to_csv(csv_filepath, index=False)
+
+            csv_url = f"/download/{csv_filename}"
+            
+            self.socketio.emit('status', {
+                'status': 'success',
+                'file_type': 'inference',
+                'model_name': f'{model_details.model_name}',
+                'message': f'Model {model_details.model_name} inference completed successfully.',
+                'file_url': csv_url
+            })
+    
+    def download_file(self, user_id, model_name, filename, file_type):
+        try:
+            if file_type == 'inference':
+                saved_folder = Config.SAVED_INFERENCES_FOLDER
+            else: 
+                saved_folder = Config.SAVED_MODELS_FOLDER
+            file_directory = safe_join(saved_folder, user_id, model_name)
+            file_path = safe_join(os.getcwd(), file_directory, filename)
+            
+            if not os.path.isfile(file_path):
+                raise HTTPException(status_code=404, detail="File not found")
+
+            return FileResponse(file_path, filename=filename, as_attachment=True)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    def get_user_models_by_id(self, user_id):
+        return self.model_repository.get_user_models_by_id(user_id, additional_properties=[
+            'created_at', 'description', 'metric', 'train_score', 'test_score', 'target_column',
+            'model_type', 'training_strategy', 'sampling_strategy', 'is_multi_class',
+            'file_line_num', 'file_name', 'sampling_strategy'
+        ])
+    
+    def get_user_model_by_user_id_and_model_name(self, user_id, model_name):
+        return self.model_repository.get_user_model_by_user_id_and_model_name(user_id, model_name, additional_properties=[
+            'created_at', 'description', 'columns', 'encoding_rules', 'transformations', 'metric', 'target_column',
+            'model_type', 'training_strategy', 'sampling_strategy', 'is_multi_class',
+            'is_time_series', 'time_series_code', 'formated_evaluations'
+        ])
+        
+    def get_model_details_file(self, user_id, model_name):
+        try:
+            model = self.model_repository.get_user_model_by_user_id_and_model_name(user_id, model_name, additional_properties=['model_description_pdf_file_path'])
+            
+            self.socketio.emit('status', {
+                'status': 'success',
+                'file_type': 'evaluations',
+                'model_name': f'{model_name}',
+                'message': f'Model {model_name} evaluations download successfully.',
+                'file_url': model['model_description_pdf_file_path']
+            })
+        except Exception as e:
+            print(f"Error during model details file retrieval: {e}")
+            self.socketio.emit('status', {'status': 'failed', 'message': f'Model {model_name} evaluations download failed.'})
+        
+    def delete_model_of_user(self, user_id, model_name):
+        self.model_storage.delete_model(user_id, model_name)
+        return self.model_repository.delete_model_of_user(user_id, model_name, hard_delete=True)
+
+
+app\services\report_file_service.py:
+import os
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, XPreformatted
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import inch
+import seaborn as sns
+import matplotlib.pyplot as plt
+from app.config.config import Config 
+
+class ReportFileService:
+    _instance = None
+
+    def __init__(self) -> None:
+        self.config = Config
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+            
+    def generate_model_evaluations_file(self, model, dataset):
+        SAVED_MODEL_FOLDER = os.path.join(self.config.SAVED_MODELS_FOLDER, model.user_id, model.model_name)
+        evaluations_filename = f"{model.model_name}__evaluations.pdf"
+        evaluations_filepath = os.path.join(SAVED_MODEL_FOLDER, evaluations_filename)
+        
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            os.makedirs(SAVED_MODEL_FOLDER)
+            
+        doc = SimpleDocTemplate(evaluations_filepath, pagesize=letter)
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle(name='Title', parent=styles['Title'], textColor='blue', alignment=TA_CENTER)
+        preformatted_style = ParagraphStyle(name='Preformatted', fontName='Courier', wordWrap='LTR', fontSize=12, leading=14)
+        
+        flowables = []
+
+        numeric_cols = dataset.select_dtypes(include=['number'])
+        
+        heatmap_filepath = os.path.join(SAVED_MODEL_FOLDER, f"{model.model_name}_heatmap.png")
+        self.__save_plot_as_image(lambda: sns.heatmap(numeric_cols.corr(), annot=True, cmap='coolwarm', fmt='.2f'),
+                        heatmap_filepath, width=10, height=8, dpi=300)
+
+        describe_df = dataset.describe().transpose()
+        describe_heatmap_filepath = os.path.join(SAVED_MODEL_FOLDER, f"{model.model_name}_describe_heatmap.png")
+        self.__save_plot_as_image(lambda: sns.heatmap(describe_df, annot=True, cmap='viridis', fmt='.2f'),
+                        describe_heatmap_filepath, width=15, height=12, dpi=300)
+
+        flowables.append(Paragraph("Heatmap", title_style))
+        flowables.append(Spacer(1, 12))
+
+        heatmap_image = Image(heatmap_filepath, width=6*inch, height=4.8*inch)
+        flowables.append(heatmap_image)
+        flowables.append(Spacer(1, 12))
+
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Describe Heatmap", title_style))
+        flowables.append(Spacer(1, 12))
+
+        describe_heatmap_image = Image(describe_heatmap_filepath, width=6*inch, height=4.8*inch)
+        flowables.append(describe_heatmap_image)
+        flowables.append(Spacer(1, 12))
+
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Model Details", title_style))
+        flowables.append(Spacer(1, 12))
+
+        text = (
+            f"Model Name: {model.model_name}\n"
+            f"Model Type: {model.model_type}\n"
+            f"Training Strategy: {model.training_strategy}\n"
+            f"Sampling Strategy: {model.sampling_strategy}\n"
+            f"Metric: {model.metric}\n\n"
+        )
+        for line in text.split('\n'):
+            flowables.append(Paragraph(line, styles['Normal']))
+            flowables.append(Spacer(1, 12))
+            
+        flowables.append(PageBreak())
+        flowables.append(Paragraph("Evaluations", title_style))
+        flowables.append(Spacer(1, 12))
+        
+        flowables.append(XPreformatted(model.formated_evaluations, preformatted_style))
+
+        doc.build(flowables)
+
+        scheme = 'https' if self.config.PREFERRED_URL_SCHEME == 'https' else 'http'
+        server_name = self.config.SERVER_NAME
+        return f"{scheme}://{server_name}/download/{evaluations_filename}"
+    
+    def __save_plot_as_image(self, plot_func, filepath, width, height, dpi=300):
+        try:
+            fig = plt.figure(figsize=(width, height), dpi=dpi)
+            plot_func()
+            plt.gca().set_xticklabels(plt.gca().get_xticklabels(), rotation=45, ha='right')
+            plt.gca().set_yticklabels(plt.gca().get_yticklabels(), rotation=0)
+            
+            # Set format for the annotations
+            for text in plt.gca().texts:
+                text.set_text(f'{float(text.get_text()):.2f}')
+            
+            plt.tight_layout()
+            fig.savefig(filepath, format='png')
+            plt.close(fig)
+            print(f"Saved plot to {filepath}")
+        except Exception as e:
+            print(f"Error saving plot as image: {e}")
+
+
+app\services\token_service.py:
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from fastapi import HTTPException, Depends, Request
+from fastapi.security import OAuth2PasswordBearer
+from starlette.status import HTTP_401_UNAUTHORIZED
+
+# Replace with your secret key
+SECRET_KEY = "your-secret-key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+class TokenService:
+    @staticmethod
+    def create_jwt_token(user_id: str, expires_delta: timedelta = None):
+        to_encode = {"sub": user_id}
+        if expires_delta:
+            expire = datetime.utcnow() + expires_delta
+        else:
+            expire = datetime.utcnow() + timedelta(minutes=15)
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        return encoded_jwt
+    
+    @staticmethod
+    def decode_token(token: str):
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(
+                    status_code=HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
+                )
+            return user_id
+        except JWTError:
+            raise HTTPException(
+                status_code=HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
+            )
+
+    @staticmethod
+    async def extract_user_id_from_token(token: str = Depends(oauth2_scheme)):
+        return TokenService.decode_token(token)
+
+app\services\user_service.py:
+from app.repositories.user_repository import UserRepository
+from app.services.hashing_service import PasswordHasher
+from app.services.token_service import TokenService
+from fastapi.responses import JSONResponse
+
+class UserService:
+    _instance = None
+
+    def __new__(cls, db):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+            cls._instance.__initialized = False
+        return cls._instance
+
+    def __init__(self, db):
+        # Ensure __init__ is only called once
+        if self.__initialized:
+            return
+        self.__initialized = True
+        self.user_repository = UserRepository(db)
+        self.token_service = TokenService()
+
+    def login(self, email, password):
+        user = self.user_repository.get_user_by_email(email)
+        if user:
+            is_valid_password = PasswordHasher.check_password(user['password'], password)
+            if is_valid_password:
+                access_token = self.token_service.create_jwt_token(str(user['_id']))
+                return JSONResponse({"message": "Login successful", "access_token": access_token}, status_code=200)
+        return JSONResponse({'message': 'Invalid credentials'}, status_code=401)
+
+    def create_user(self, email, password):
+        hashed_password = PasswordHasher.hash_password(password)
+        user = self.user_repository.create_user(email, hashed_password) 
+        return user
+    
+    def get_user_by_id(self, user_id):
+        return self.user_repository.get_user_by_id(user_id)
+
+
+app\storage\local_model_storage.py:
+import os
+import pickle
+import shutil
+import app.app as app
+
+
+class LocalModelStorage:
+    
+    def load_model(self, user_id, model_name):
+        SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+        SAVED_MODEL_FILE = os.path.join(SAVED_MODEL_FOLDER, 'model.sav')
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            raise Exception(f"Model {SAVED_MODEL_FILE} not found")
+        return pickle.load(open(SAVED_MODEL_FILE, 'rb'))
+
+    def save_model(self, model, user_id, model_name):
+            SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+            SAVED_MODEL_FILE = os.path.join(SAVED_MODEL_FOLDER, 'model.sav')
+            if not os.path.exists(SAVED_MODEL_FOLDER):
+                os.makedirs(SAVED_MODEL_FOLDER)
+            pickle.dump(model, open(SAVED_MODEL_FILE, 'wb'))
+            return SAVED_MODEL_FILE
+        
+    def delete_model(self, user_id, model_name):
+        SAVED_MODEL_FOLDER = os.path.join(app.Config.SAVED_MODELS_FOLDER, user_id, model_name)
+        if not os.path.exists(SAVED_MODEL_FOLDER):
+            pass
+            # raise Exception(f"Model {model_name} for user {user_id} not found")
+        shutil.rmtree(SAVED_MODEL_FOLDER)
+        return f"Model {model_name} for user {user_id} has been deleted"
+
+app\storage\model_storage.py:
+import boto3
+import pickle
+from botocore.exceptions import NoCredentialsError
+from app.config.config import Config
+
+# AWS S3 configuration
+AWS_ACCESS_KEY = Config.AWS_ACCESS_KEY
+AWS_SECRET_KEY = Config.AWS_SECRET_KEY
+BUCKET_NAME = Config.BUCKET_NAME
+
+# Initialize S3 client
+s3_client = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY)
+
+class ModelStorage:
+    def load_model(self, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            response = s3_client.get_object(Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            model_data = response['Body'].read()
+            return pickle.loads(model_data)
+        except s3_client.exceptions.NoSuchKey:
+            raise Exception(f"Model {SAVED_MODEL_KEY} not found in S3 bucket.")
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+
+    def save_model(self, model, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            model_data = pickle.dumps(model)
+            s3_client.put_object(Body=model_data, Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            return SAVED_MODEL_KEY
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+        
+    def delete_model(self, user_id, model_name):
+        # S3 Key for the model file
+        SAVED_MODEL_KEY = f'models/{user_id}/{model_name}/model.sav'
+        try:
+            s3_client.delete_object(Bucket=BUCKET_NAME, Key=SAVED_MODEL_KEY)
+            return f"Model {SAVED_MODEL_KEY} successfully deleted from S3 bucket."
+        except s3_client.exceptions.NoSuchKey:
+            print(f"Model {SAVED_MODEL_KEY} not found in S3 bucket.")
+        except NoCredentialsError:
+            raise Exception("Credentials not available")
+
+
+
+app\tasks\inference_task.py:
+import re
+import numpy as np
+import pandas as pd
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+from app.ai.data_preprocessing import DataPreprocessing
+from app.tasks.llm_task import LlmTask
+
+class InferenceTask:
+    def __init__(self) -> None:
+        self.data_preprocessing = DataPreprocessing()
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.llm_task = LlmTask()
+
+    def run_task(self, model_details, loaded_model, original_df, inference_task_callback):
+        try:
+            is_inference_successfully_finished = False
+            df_copy = original_df.copy()
+            if model_details.is_time_series:
+                df_copy = self.llm_task.processed_dataset(original_df.copy(), model_details.time_series_code)
+            X_data = self.data_preprocessing.exclude_columns(df_copy, columns_to_exclude=[model_details.target_column])
+            X_data = self.__data_preprocessing(X_data, model_details)
+            
+            if model_details.model_type == 'classification':
+                y_predict = self.classificationEvaluate.predict(loaded_model, X_data)
+                original_df[f'{model_details.target_column}_predict'] = y_predict
+                y_predict_proba = self.classificationEvaluate.predict_proba(loaded_model, X_data)
+                proba_df = pd.DataFrame(y_predict_proba.round(2), columns=[f'Prob_{cls}' for cls in loaded_model.classes_])
+                original_df = pd.concat([original_df, proba_df], axis=1)
+                original_df = self.__evaluate_inference(model_details, original_df, y_predict, y_predict_proba)
+
+            elif model_details.model_type == 'regression':
+                y_predict = self.regressionEvaluate.predict(loaded_model, X_data)
+                original_df[f'{model_details.target_column}_predict'] = y_predict
+                original_df = self.__evaluate_inference(model_details, original_df, y_predict, None)
+                
+                
+            is_inference_successfully_finished = True
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        finally:
+            inference_task_callback(model_details, original_df, is_inference_successfully_finished)
+
+    def __data_preprocessing(self, df, model):
+        df_copy = df.copy()
+        df_copy = self.data_preprocessing.sanitize_cells(df_copy)
+        df_copy = self.data_preprocessing.fill_missing_numeric_cells(df_copy)
+        df_copy = self.data_preprocessing.set_not_numeric_as_categorial(df_copy)
+        df_copy = self.data_preprocessing.convert_tdatetime_columns_to_datetime_dtype(df_copy)
+        if model.encoding_rules:
+            df_copy = self.data_preprocessing.apply_encoding_rules(df_copy, model.encoding_rules)
+        if model.transformations:
+             df_copy = self.data_preprocessing.transformed_numeric_column_details(df_copy, model.transformations)
+        df_copy = self.data_preprocessing.convert_datatimes_columns_to_normalized_floats(df_copy)
+        return df_copy
+    
+    def extract_original_metrics(self, metrics_string, key):
+        # Define regex pattern to capture the value for the given key
+        pattern = fr'{key}: ([\d\.\-e]+)'
+        
+        # Find all occurrences of the key in the string
+        matches = re.findall(pattern, metrics_string)
+        
+        if len(matches) < 2:
+            raise ValueError(f'Could not find both train and test values for key: {key}')
+        
+        # Return the first match as the train value and the second as the test value
+        return matches[0], matches[1]
+    
+    def format_evaluation(self, value):
+        try:
+            return f"{float(value):.3f}"
+        except ValueError:
+            return value
+    
+    
+    def __evaluate_inference(self, model_details, original_df, y_predict, y_predict_proba):
+        if model_details.target_column in original_df.columns:
+            filtered_original, filtered_predicted, filtered_y_predict_proba = \
+                self.data_preprocessing.filter_invalid_entries(original_df[model_details.target_column], y_predict, y_predict_proba)
+            if model_details.model_type == 'classification':
+                # TODO: use filtered_original, filtered_predicted and also filtered_y_predict
+                inference_evaluations = self.classificationEvaluate.calculate_metrics(filtered_original, filtered_predicted, filtered_y_predict_proba)
+            elif model_details.model_type == 'regression':
+                inference_evaluations = \
+                    self.regressionEvaluate.calculate_metrics(filtered_original, filtered_predicted)
+
+            # Prepare the evaluation data
+            # Add 'Evaluations' column to the original DataFrame
+            if 'Evaluations' not in original_df.columns:
+                # original_df.insert(0, 'Evaluations', np.nan)
+                original_df["Evaluations"] = np.nan
+
+                # Prepare the evaluation data
+                eval_types = ['Inference:', 'Train:', 'Test:']
+                eval_data = {'Evaluations': eval_types}
+
+                # Create empty columns in original_df for each evaluation metric
+                for key in inference_evaluations.keys():
+                    train_eval, test_eval = self.extract_original_metrics(model_details.formated_evaluations, key)
+                    if key not in original_df.columns:
+                        original_df[key] = np.nan
+
+                    eval_data[key] = [
+                        self.format_evaluation(inference_evaluations[key]),
+                        self.format_evaluation(train_eval),
+                        self.format_evaluation(test_eval)
+                    ]
+
+                # Create eval_df with only the evaluation metrics
+                eval_df = pd.DataFrame(eval_data)
+
+                # Iterate over eval_df rows and cells to copy the values into original_df
+                for row_index, row in eval_df.iterrows():
+                    for column_name, cell_value in row.items():
+                        original_df.at[row_index, column_name] = cell_value
+
+        return original_df
+
+
+
+
+app\tasks\llm_task.py:
+import re
+import pandas as pd
+import ast
+from openai import OpenAI
+import app.app as app
+
+class LlmTask:
+    def __init__(self) -> None:
+        self.api_key = app.Config.OPENAI_API_KEY
+        self.model = app.Config.MODEL
+        self.max_tokens = app.Config.MAX_TOKENS
+        self.llm_max_tries = app.Config.LLM_MAX_TRIES
+        self.llm_number_of_dataset_lines = app.Config.LLM_NUMBER_OF_DATASET_LINES
+
+    def use_llm_toproccess_timeseries_dataset(self, raw_dataset, target_column):
+        # return raw_dataset, CODE
+        try_no = 1
+        try:
+            head_rows = raw_dataset.head(int(self.llm_number_of_dataset_lines)).to_csv(index=False)
+            tail_rows = raw_dataset.tail(int(self.llm_number_of_dataset_lines)).to_csv(index=False)
+
+            def use_llm_toproccess_timeseries_dataset_execution():
+                # Get the feature engineering code from LLM model
+                code = self._get_feature_engineering_code(
+                    head_rows, tail_rows, target_column
+                )
+
+                processed_dataset = self.processed_dataset(raw_dataset, code)
+
+                # Return the processed dataset
+                print(f"processed_dataset: {processed_dataset}")
+                return processed_dataset, code
+
+            return use_llm_toproccess_timeseries_dataset_execution()
+        except Exception as e:
+            print(f"{e}")
+            if try_no < self.llm_max_tries:
+                try_no += 1
+                return use_llm_toproccess_timeseries_dataset_execution()
+
+    def processed_dataset(self, raw_dataset, code):
+        try:
+            # Check if the code is safe before executing
+            if not self.is_code_safe(code):
+                raise Exception("Generated code is not safe to execute.")
+
+            # Prepare the execution environment
+            local_vars = {}
+            safe_globals = {"pd": pd, "int": int, "float": float, "range": range, "__builtins__": {}}
+
+            # Execute the code within the context of local_vars and safe_globals
+            exec(code, safe_globals, local_vars)
+
+            # Retrieve the feature_engineering function from local_vars
+            feature_engineering = local_vars["feature_engineering"]
+            processed_dataset = feature_engineering(raw_dataset)
+            return processed_dataset
+        except Exception as e:
+            print(e)
+
+    def _get_feature_engineering_code(self, head_rows, tail_rows, target_column):
+        # Sanitize the data to remove any code or malicious content
+        head_rows = self.sanitize_data(head_rows)
+        tail_rows = self.sanitize_data(tail_rows)
+
+        # Combine the head and tail rows into a single prompt
+        combined_data = f"head of {self.llm_number_of_dataset_lines} rows:\n{head_rows}\ntail of {self.llm_number_of_dataset_lines} rows:\n{tail_rows}"
+        prompt = (
+            f"Given the following raw time series dataset:\n{combined_data}\n"
+            f"Please write a Python function named feature_engineering with a parameter named df, that performs feature engineering to predict the '{target_column}' column. "
+            "The function should include the following steps:\n"
+            "1. Convert the datetime, date, and time columns to datetime format.\n"
+            "2. Convert all relevant columns to numeric types, handling non-numeric values by converting them to NaN.\n"
+            "3. Fill any NaN values in the target column with the next value (forward fill) if the target column is missing, and for the last row, fill it with the previus vlaue.\n"
+            "4. Generate time-based features such as year, month, quarter, hour, day of year, and week of year.\n"
+            "5. Create lag features for the specified columns (up to 12 lags). If lag cell value is NaN, convert it to 0.0 \n"
+            "6. Create rolling window features (mean and sum) for the specified columns with windows of 3, 6, and 12 periods. If cell value is NaN, convert it to 0.0\n"
+            "Ensure that the generated code is safe and does not perform any harmful or malicious actions. "
+            "The function should not read from any files and should return the processed dataset directly as a variable named 'df'. "
+            "Do not include any data scaling or transformations. Handle missing values appropriately to ensure columns are treated as numeric types, "
+            "and fill missing values to keep the number of rows consistent."
+            "\nNote: Do not include any import statements in your code; assume all necessary libraries are already imported."
+        )
+        print(f"prompt:{prompt}")
+        client = OpenAI(api_key=self.api_key)
+        try:
+            # Use OpenAI API to get the feature engineering code
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+            )
+
+            # Extract the code from the response
+            code_match = re.search(
+                r"```python\n(.*?)\n```", response.choices[0].message.content, re.DOTALL
+            )
+            if not code_match:
+                raise Exception("Failed to extract code from the response.")
+
+            code = code_match.group(1)
+            code = code.split("# Example usage")[0]
+            print(f"code: {code}")
+            return code
+        except Exception as e:
+            print(f"{e}")
+
+    def is_code_safe(self, code):
+        """
+        Check if the provided code is safe to execute.
+        """
+        try:
+            # Parse the code into an Abstract Syntax Tree (AST)
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            print(f"Syntax error in code: {e}")
+            return False
+
+        # Check for dangerous nodes in the AST
+        if not self._is_ast_safe(tree):
+            return False
+
+        return True
+
+    def _is_ast_safe(self, tree):
+        """
+        Recursively check AST nodes for unsafe constructs.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Check if import statements are safe
+                # if not self._is_import_safe(node):
+                    return False
+            elif isinstance(node, ast.Call):
+                # Check if function calls are safe
+                if not self._is_call_safe(node):
+                    return False
+            elif isinstance(node, ast.Attribute):
+                # Check if attribute access is safe
+                if not self._is_attribute_safe(node):
+                    return False
+            elif isinstance(node, ast.Name):
+                # Check if variable or function names are safe
+                if not self._is_name_safe(node):
+                    return False
+        return True
+
+    def _is_call_safe(self, node):
+        """
+        Check if function calls are safe.
+        """
+        dangerous_functions = {
+            'eval', 'exec', 'open', 'compile', 'input',
+            'globals', 'locals', 'vars', '__import__'
+        }
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+            if func_name in dangerous_functions:
+                print(f"Use of dangerous function '{func_name}' detected.")
+                return False
+        elif isinstance(node.func, ast.Attribute):
+            # Check if calling dangerous methods from dangerous modules
+            if isinstance(node.func.value, ast.Name):
+                module_name = node.func.value.id
+                attr_name = node.func.attr
+                dangerous_modules = {'os', 'sys', 'subprocess', 'shutil'}
+                if module_name in dangerous_modules:
+                    print(f"Use of dangerous module '{module_name}' detected.")
+                    return False
+        return True
+
+    def _is_attribute_safe(self, node):
+        """
+        Check if attribute access is safe.
+        """
+        if isinstance(node.value, ast.Name):
+            if node.value.id == '__builtins__':
+                print("Access to '__builtins__' is not allowed.")
+                return False
+        return True
+
+    def _is_name_safe(self, node):
+        """
+        Check if variable or function names are safe.
+        """
+        dangerous_names = {
+            'eval', 'exec', 'open', 'compile', 'input',
+            'globals', 'locals', 'vars', '__import__', '__builtins__'
+        }
+        if node.id in dangerous_names:
+            print(f"Use of dangerous name '{node.id}' detected.")
+            return False
+        return True
+
+    def sanitize_data(self, data):
+        """
+        Remove any code-like patterns from the data.
+        """
+        # Remove any script tags or code injections
+        data = re.sub(r'[<>]', '', data)
+        data = re.sub(r'(?i)script', '', data)
+        data = re.sub(r'(?i)eval\(', '', data)
+        return data
+
+
+app\tasks\training_task.py:
+from app.ai.models.classification.implementations.lightgbm_classifier import LightgbmClassifier
+from app.ai.data_preprocessing import DataPreprocessing 
+from app.ai.models.classification.evaluate import Evaluate as ClassificationEvaluate
+from app.ai.models.regression.evaluate import Evaluate as RegressionEvaluate
+from app.ai.models.regression.implementations.lightgbm_regerssor import LightGBMRegressor
+from app.ai.models.regression.ensemble.ensemble import Ensemble as RegressionEnsemble
+from app.ai.models.classification.ensemble.ensemble import Ensemble as ClassificationEnsemble
+from app.tasks.llm_task import LlmTask
+
+class TrainingTask:
+    def __init__(self) -> None:
+        self.classificationEvaluate = ClassificationEvaluate()
+        self.regressionEvaluate = RegressionEvaluate()
+        self.data_preprocessing = DataPreprocessing()
+        self.llm_task = LlmTask()
+
+    def run_task(self, model, headers, df, task_callback):
+        is_training_successfully_finished = False
+        trained_model = None
+        evaluations = None
+        encoding_rules = None
+        transformations = None
+        try:
+            if model.training_strategy == 'ensembleModelsFast' or model.training_strategy == 'ensembleModelsTuned':
+                trained_model, evaluations, encoding_rules, transformations = self.__train_multi_models(model, df.copy())
+            else:
+                trained_model, evaluations, encoding_rules, transformations = self.__train_single_model(model, df.copy())
+            is_training_successfully_finished = True
+        except Exception as e:
+            print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        finally:
+            try:
+                model.formated_evaluations = evaluations['formated_evaluations']
+                model.train_score = evaluations['train_score']
+                model.test_score = evaluations['test_score']
+                task_callback(df, model, trained_model, encoding_rules, transformations,  headers, is_training_successfully_finished)
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+                is_training_successfully_finished = False
+                task_callback(None, model, None, None, None, None, is_training_successfully_finished)
+
+
+    def __train_single_model(self, model, df):
+        df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+        metric = model.metric
+        if model.model_type == 'classification':
+            training_model = LightgbmClassifier(train_df = df, target_column = model.target_column, scoring=model.metric, 
+                                                sampling_strategy=model.sampling_strategy)
+            evaluate = self.classificationEvaluate
+
+        elif model.model_type == 'regression':
+            training_model = LightGBMRegressor(train_df = df, target_column = model.target_column, scoring=model.metric)
+            evaluate = self.regressionEvaluate
+            metric = evaluate.get_metric_mapping(model.metric)
+
+        if model.training_strategy == 'singleModelTuned':
+            training_model.tune_hyper_parameters()
+
+        trained_model = training_model.train()
+        evaluations = evaluate.evaluate_train_and_test(trained_model, training_model)
+        formated_evaluations = evaluate.format_train_and_test_evaluation(evaluations)
+        print(formated_evaluations)
+
+        train_score = evaluations['train_metrics'][metric]
+        test_score = evaluations['test_metrics'][metric]
+        evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+        
+        return trained_model, evaluations, None, None
+        
+
+    def __train_multi_models(self, model, df):
+        if model.model_type == 'classification':
+            df = self.__data_preprocessing(df, model, fill_missing_numeric_cells=True)
+            ensemble = ClassificationEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True, apply_encoding_rules=True,
+                                              create_transformations=True, apply_transformations=True,
+                                              sampling_strategy=model.sampling_strategy, scoring=model.metric)
+            ensemble.create_models(df)
+            ensemble.sort_models_by_score()
+            ensemble.create_voting_classifier()
+            if model.training_strategy == 'ensembleModelsTuned':
+                ensemble.tuning_top_models()
+            ensemble.train_voting_classifier()
+            ensemble.evaluate_voting_classifier()
+
+            evaluate = self.classificationEvaluate
+            formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_classifier_evaluations)
+            print(formated_evaluations)
+            train_score = ensemble.voting_classifier_evaluations['train_metrics'][model.metric]
+            test_score = ensemble.voting_classifier_evaluations['test_metrics'][model.metric]
+            evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+            
+            return ensemble.trained_voting_classifier, evaluations, ensemble.encoding_rules, ensemble.transformations
+        
+        if model.model_type == 'regression':
+            try:
+                df = self.__data_preprocessing(df, model)
+                ensemble = RegressionEnsemble(train_df = df, target_column = model.target_column, create_encoding_rules=True,
+                                            apply_encoding_rules=True, create_transformations=True, apply_transformations=True, scoring=model.metric)
+                ensemble.create_models(df)
+                ensemble.sort_models_by_score()
+
+                ensemble.create_voting_regressor()
+                if model.training_strategy == 'ensembleModelsTuned':
+                    ensemble.tuning_top_models()
+                ensemble.train_voting_regressor()
+                ensemble.evaluate_voting_regressor()
+
+                evaluate = self.regressionEvaluate
+                formated_evaluations = evaluate.format_train_and_test_evaluation(ensemble.voting_regressor_evaluations)
+                print(formated_evaluations)
+                metric = self.regressionEvaluate.get_metric_mapping(model.metric)
+                train_score = ensemble.voting_regressor_evaluations['train_metrics'][metric]
+                test_score = ensemble.voting_regressor_evaluations['test_metrics'][metric]
+                evaluations = {'formated_evaluations': formated_evaluations, 'train_score': train_score, 'test_score': test_score}
+                
+            except Exception as e:
+                print(f"{type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+            return ensemble.trained_voting_regressor, evaluations, ensemble.encoding_rules, ensemble.transformations
+            
+        
+    def __data_preprocessing(self, df, model, fill_missing_numeric_cells=False):
+        df_copy=df.copy()
+        if model.is_time_series:
+            df_copy, model.time_series_code = self.llm_task.use_llm_toproccess_timeseries_dataset(df_copy, model.target_column)
+        data_preprocessing = DataPreprocessing()
+        # df_copy = data_preprocessing.sanitize_dataframe(df_copy)
+        if fill_missing_numeric_cells:
+            df_copy = data_preprocessing.fill_missing_numeric_cells(df_copy)
+        df_copy = self.data_preprocessing.convert_tdatetime_columns_to_datetime_dtype(df_copy)
+        return df_copy 

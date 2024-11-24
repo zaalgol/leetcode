@@ -1149,12 +1149,54 @@ class Solution(object):
                 j += 1
 
         return ans if ans != math.inf else 0
+    
+    # binary search in rotate array
+    def search(self, nums: list[int], target: int) -> int:
+        # start = 0
+        # end = len(nums) - 1
+        # mid = (end + start) // 2 
+        # while end >= start:
+        #     if nums[mid] == target:
+        #         return mid
+        #     if nums[mid] > target:
+        #         if nums[mid] > nums[end]:
+        #             start = mid +1
+        #         else:
+        #             end = mid -1
+        #     else:
+        #         if nums[mid] < nums[start]:
+        #             end = mid -1
+        #         else:
+        #             start = mid +1
+        #     mid = (end + start) // 2 
+        # return -1
+        l = 0
+        r = len(nums) - 1
+
+        while l <= r:
+            m = (l + r) // 2
+            if nums[m] == target:
+                return m
+            if nums[l] <= nums[m]:  # nums[l..m] are sorted.
+                if nums[l] <= target < nums[m]:
+                    r = m - 1
+                else:
+                    l = m + 1
+            else:  # nums[m..n - 1] are sorted.
+                if nums[m] < target <= nums[r]:
+                    l = m + 1
+                else:
+                    r = m - 1
+
+        return -1
 
     
     
     
         
 solution = Solution()
+solution.search([4,5,6,7,0,1,2], 0)
+
 solution.minSubArrayLen(7, [2,3,1,2,4,3])
 
 solution.maximalSquare([["1","0","1","0","0"],["1","0","1","1","1"],["1","1","1","1","1"],["1","0","0","1","0"]])
